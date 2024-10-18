@@ -21,7 +21,7 @@ bash datasets.sh
 
 ## Running Experiments
 
-Use either of the provided evaluation scripts to run a experiments on the Stats-CEB or JOB-light workload.
+Use either of the provided evaluation scripts to run experiments on the Stats-CEB or JOB-light workload.
 
 ```
 bash run_stats.sh
