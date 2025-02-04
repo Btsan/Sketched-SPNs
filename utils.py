@@ -148,32 +148,3 @@ def predicates_keys_from(query):
             predicates[table][col][op] = val 
 
     return predicates, dict(keys)
-
-def get_dataframe(filepath, names=None, columns=None):
-    if names:
-        df = pd.read_csv(filepath,
-                        names=names,
-                        usecols=columns,
-                        escapechar='\\',
-                        encoding='utf-8',
-                        on_bad_lines='skip',
-                        low_memory=False)
-    else:
-        df = pd.read_csv(filepath,
-                        usecols=columns,
-                        escapechar='\\',
-                        encoding='utf-8',
-                        on_bad_lines='skip',
-                        low_memory=False)
-    if columns:
-        return df[columns]
-    return df
-
-def get_workload(filepath):
-    workload = pd.read_csv(filepath,
-                           delimiter='|',
-                           names=['query', 1, 'parent', 2, 'cardinality'],
-                           usecols=['query', 'parent', 'cardinality'],
-                           )[['query', 'parent', 'cardinality']]
-    workload['cardinality'] = workload['cardinality'].astype('float64')
-    return workload
