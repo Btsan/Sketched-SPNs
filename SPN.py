@@ -143,6 +143,9 @@ class SPN(object):
         self.memory = self.node.memory
         return
     
+    def memory_usage(self):
+        return self.node.memory_usage()
+
     # todo: rename key to sketch_attrs
     def __call__(self, predicates, key, **kwargs):
         if not self.columns.intersection(predicates.keys()) and not self.columns.intersection(key):
@@ -187,6 +190,9 @@ class UnivariateLeaf(object):
         
         self.memory = self.sketch.memory_usage()
         return
+    
+    def memory_usage(self):
+        return self.sketch.memory_usage()
 
     def __call__(self, predicates, key, **kwargs):
         estimator, sketch_time = self.sketch(predicates, key, **kwargs)
@@ -220,6 +226,9 @@ class JoinLeaf(object):
         self.memory = self.sketch.memory_usage()
         return
     
+    def memory_usage(self):
+        return self.sketch.memory_usage()
+    
     def __call__(self, predicates, keys, **kwargs):
         estimator, sketch_time = self.sketch(predicates, keys, **kwargs)
         return estimator, sketch_time
@@ -235,6 +244,10 @@ class SumNode(object):
             self.size += len(c)
             self.memory += self.children[i].memory
         return
+    
+    def memory_usage(self):
+        nbytes = sum([child.memory_usage() for child in self.children])
+        return nbytes
 
     def __call__(self, predicates, key, **kwargs):
         freq = 0
@@ -262,6 +275,10 @@ class ProductNode(object):
             self.memory += self.children[i].memory
         self.pessimistic = pessimistic
         return
+    
+    def memory_usage(self):
+        nbytes = sum([child.memory_usage() for child in self.children])
+        return nbytes
     
     def __call__(self, predicates, key, **kwargs):
         probs = [1]

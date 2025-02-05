@@ -346,8 +346,8 @@ if __name__ == '__main__':
     if args.method == 'ams':
         args.width = 1
     
-    if args.method in ('bound-sketch', 'count-min'):
-        args.pessimistic = True
+    # if args.method in ('bound-sketch', 'count-min'):
+    #     args.pessimistic = True
 
     num_components = len(tables) - 1 # this suffices for acyclic joins
     bin_hashes = [BinHash(args.depth, args.width) for _ in range(num_components)]
@@ -411,7 +411,7 @@ if __name__ == '__main__':
             else:
                 models[table] = SPN(dataset, rdc_features, bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=args.decompose, min_cluster=min_cluster, cluster_nbits=args.k, cluster_next=args.cluster_first, sparse=args.sparse, keys=meta['keys'], method=args.method, bifocal=args.bifocal, pessimistic=args.pessimistic)
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-            print(f"{'Hashed data' if args.exact else 'Trained SPN'} ({models[table].memory // 1e6:,} MB) on {table} ({delta})", flush=True)
+            print(f"{'Hashed data' if args.exact else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MB) on {table} ({delta})", flush=True)
             training_times.append(delta)
         total_training = sum(training_times, pd.Timedelta(0))
 
@@ -484,3 +484,8 @@ if __name__ == '__main__':
         print(f"Total Model Inference Time: {workload['inference_time'].sum()} (average {workload['inference_time'].mean()})")
         print(f"Total Estimation Time: {workload['estimation_time'].sum()} (average {workload['estimation_time'].mean()})")
         print(f"Total Workload Time: {workload['total_time'].sum()} (average {workload['total_time'].mean()})")
+
+        # compute memory usage due to sketches after running workload
+        model_mem_usage = sum([model.memory_usage() for model in models.values()])
+
+        print(f"Total size model: {model_mem_usage:,.2f} Bytes = {model_mem_usage / 2**10:,.2f} KB = {model_mem_usage / 2**20:,.2f} = {model_mem_usage / 2**30:,.2f}")
