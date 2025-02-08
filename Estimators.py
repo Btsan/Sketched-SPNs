@@ -18,6 +18,13 @@ class CountEstimator(object):
             nbytes += self.exact_hi.memory_usage()
             nbytes += self.sketch_hi.numel() * self.sketch_hi.element_size()
         return nbytes
+    
+    def total(self):
+        total = self.sketch_lo.sum().abs().item()
+        if self.is_bifocal:
+            total += self.exact_hi.sum().abs().item()
+            total += self.sketch_hi.sum().abs().item()
+        return total
 
     def __repr__(self):
         if self.is_bifocal:

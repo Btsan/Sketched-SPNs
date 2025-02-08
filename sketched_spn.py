@@ -197,11 +197,6 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch'):
                 sketches_hi[id] = estimator.sketch_hi.cuda() if cuda else estimator.sketch_hi
         exact_hi[id] = estimator.exact_hi
 
-        # primary key correction - if provided
-        # if name in primary and len(primary[name].intersection(keys)) > 0:
-        #     sketches_lo[id] = sketches_lo[id].clamp_(min=-1, max=1)
-        #     if estimator.is_bifocal:
-        #         sketches_hi[id] = sketches_hi[id].clamp_(min=-1, max=1)
     total_inference = pd.Timedelta(sum(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
     use_bifocal = estimator.is_bifocal
@@ -359,7 +354,7 @@ if __name__ == '__main__':
 
     workload['num_tables'] = 0
     workload['join_attributes'] = 0
-    workload['similarity'] = 0
+    # workload['similarity'] = 0
     # workload['exact_time'] = pd.Timedelta(0.0, unit='sec')
     workload['inference_time'] = pd.Timedelta(0.0, unit='sec')
     workload['sketching_time'] = pd.Timedelta(0.0, unit='sec')
@@ -393,6 +388,7 @@ if __name__ == '__main__':
                     rdc_features = pd.read_pickle(save_path)
                     delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
                     print(f"Loaded pickled features from {save_path} ({delta})")
+                    assert len(rdc_features) == len(dataset), f"Features ({save_path}) do not match ({args.data/table}.csv)"
                 else:
                     args.pickle.mkdir(parents=True, exist_ok=True)
                     rdc_features = rdc_transform(dataset, meta['col_types'])
@@ -487,5 +483,8 @@ if __name__ == '__main__':
 
         # compute memory usage due to sketches after running workload
         model_mem_usage = sum([model.memory_usage() for model in models.values()])
-
-        print(f"Total size model: {model_mem_usage:,.2f} Bytes = {model_mem_usage / 2**10:,.2f} KB = {model_mem_usage / 2**20:,.2f} = {model_mem_usage / 2**30:,.2f}")
+        gb = model_mem_usage // 2**30
+        mb = (model_mem_usage % 2**30) // 2**20
+        kb = ((model_mem_usage % 2**30) % 2**20) // 2**10
+        b = ((model_mem_usage % 2**30) % 2**20) % 2**10
+        print(f"Total size model: {gb:,} GB, {mb:,} MB, {kb:,} KB, {b:,} B ({model_mem_usage:,} total bytes)")

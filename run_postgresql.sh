@@ -1,7 +1,7 @@
 
-clusters=(1 5e-1 2e-1 1e-1 5e-2 1e-2)
-widths=(4096 1e4 1e5 1e6)
-methods=(count bound)
+clusters=(1 1e-1 1e-2) # 6 -> 3
+widths=(1e6) # 4 -> 1
+methods=(count bound) # 2 
 
 for w in "${widths[@]}"
 do
@@ -10,6 +10,7 @@ do
         for c in "${clusters[@]}"
         do
             base="stats-ceb_5x"$w"_min"$c"_"$m
+            echo $base
 
             psql \
             -d stats \
@@ -27,13 +28,13 @@ do
             -f stats_CEB.sql \
             &> "runtimes/"$base"_pessimistic.log"
         done
-        psql \
-        -d stats \
-        -U postgres \
-        -c "SET ml_joinest_fname='estimates/"$base"_exact.txt';" \
-        -f prefix.sql \
-        -f stats_CEB.sql \
-        &> "runtimes/"$base"_exact.log"
+        # psql \
+        # -d stats \
+        # -U postgres \
+        # -c "SET ml_joinest_fname='estimates/"$base"_exact.txt';" \
+        # -f prefix.sql \
+        # -f stats_CEB.sql \
+        # &> "runtimes/"$base"_exact.log"
     done
 done
 

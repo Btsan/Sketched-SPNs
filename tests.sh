@@ -31,90 +31,93 @@ mkdir -p ./tests/
 #                         --pessimistic \
 #                         --cuda &> tests/bound_sketch.log
 
-clusters=(1 5e-1 2e-1 1e-1 5e-2 1e-2)
-widths=(4096 1e4 1e5 1e6)
+clusters=(5e-2 1e-2)
+widths=(1e5 1e6)
+decompose=(5e-2 1e-2)
 
 for w in "${widths[@]}"
 do
     for c in "${clusters[@]}"
     do
-        echo "running Stats-CEB: min. cluster = "$c" sketch width = "$w
-        echo .
-        echo .
-        echo .
+        for d in "${decompose[@]}"
+        do
+            echo "running Stats-CEB: min. cluster = "$c" sketch width = "$w
+            echo .
+            echo .
+            echo .
 
-        filename="./tests/stats-ceb_5x"$w"_min"$c
+            filename="./tests/stats-ceb_5x"$w"_decompose"$d"_min"$c
 
-        # python3 sketched_spn.py \
-        # --depth 5 \
-        # --width $w \
-        # --pickle ./features/ \
-        # --independence 32 \
-        # --min_cluster $c \
-        # --method count-sketch \
-        # --writefile $filename"_count.csv" \
-        # --cuda \
-        # > $filename"_count.log"
+            python3 sketched_spn.py \
+            --depth 5 \
+            --width $w \
+            --pickle ./features/ \
+            --independence 32 \
+            --min_cluster $c \
+            --method count-sketch \
+            --writefile $filename"_count.csv" \
+            --cuda \
+            > $filename"_count.log"
 
-        # python3 sketched_spn.py \
-        # --depth 5 \
-        # --width $w \
-        # --pickle ./features/ \
-        # --independence 32 \
-        # --min_cluster $c \
-        # --method count-sketch \
-        # --pessimistic \
-        # --writefile $filename"_count_pessimistic.csv" \
-        # --cuda \
-        # > $filename"_count_pessimistic.log"
-        
-        # python3 sketched_spn.py \
-        # --depth 5 \
-        # --width $w \
-        # --pickle ./features/ \
-        # --independence 32 \
-        # --min_cluster $c \
-        # --method bound-sketch \
-        # --writefile $filename"_bound.csv" \
-        # --cuda \
-        # > $filename"_bound.log"
+            python3 sketched_spn.py \
+            --depth 5 \
+            --width $w \
+            --pickle ./features/ \
+            --independence 32 \
+            --min_cluster $c \
+            --method count-sketch \
+            --pessimistic \
+            --writefile $filename"_count_pessimistic.csv" \
+            --cuda \
+            > $filename"_count_pessimistic.log"
+            
+            python3 sketched_spn.py \
+            --depth 5 \
+            --width $w \
+            --pickle ./features/ \
+            --independence 32 \
+            --min_cluster $c \
+            --method bound-sketch \
+            --writefile $filename"_bound.csv" \
+            --cuda \
+            > $filename"_bound.log"
 
-        # python3 sketched_spn.py \
-        # --depth 5 \
-        # --width $w \
-        # --pickle ./features/ \
-        # --independence 32 \
-        # --min_cluster $c \
-        # --method bound-sketch \
-        # --pessimistic \
-        # --writefile $filename"_bound_pessimistic.csv" \
-        # --cuda \
-        # > $filename"_bound_pessimistic.log"
-
+            python3 sketched_spn.py \
+            --depth 5 \
+            --width $w \
+            --pickle ./features/ \
+            --independence 32 \
+            --min_cluster $c \
+            --method bound-sketch \
+            --pessimistic \
+            --writefile $filename"_bound_pessimistic.csv" \
+            --cuda \
+            > $filename"_bound_pessimistic.log"
+        done
     done
 
-    filename="./tests/stats-ceb_5x"$w
+    # filename="./tests/stats-ceb_5x"$w
     
-    python3 sketched_spn.py \
-    --depth 5 \
-    --width $w \
-    --pickle ./features/ \
-    --independence 32 \
-    --method count-sketch \
-    --exact \
-    --writefile $filename"_count_exact.csv" \
-    --cuda \
-    > $filename"_count_exact.log"
+    # python3 sketched_spn.py \
+    # --depth 5 \
+    # --width $w \
+    # --pickle ./features/ \
+    # --independence 32 \
+    # --method count-sketch \
+    # --exact \
+    # --writefile $filename"_count_exact.csv" \
+    # --cuda \
+    # > $filename"_count_exact.log"
 
-    python3 sketched_spn.py \
-    --depth 5 \
-    --width $w \
-    --pickle ./features/ \
-    --independence 32 \
-    --method bound-sketch \
-    --exact \
-    --writefile $filename"_bound_exact.csv" \
-    --cuda \
-    > $filename"_bound_exact.log"
+    # python3 sketched_spn.py \
+    # --depth 5 \
+    # --width $w \
+    # --pickle ./features/ \
+    # --independence 32 \
+    # --method bound-sketch \
+    # --exact \
+    # --writefile $filename"_bound_exact.csv" \
+    # --cuda \
+    # > $filename"_bound_exact.log"
     
 done
