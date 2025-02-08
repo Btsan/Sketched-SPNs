@@ -483,8 +483,11 @@ if __name__ == '__main__':
 
         # compute memory usage due to sketches after running workload
         model_mem_usage = sum([model.memory_usage() for model in models.values()])
+
+        print(f"Total size model: {model_mem_usage:,.2f} Bytes = {model_mem_usage / 2**10:,.2f} KB = {model_mem_usage / 2**20:,.2f} = {model_mem_usage / 2**30:,.2f}")
+
         gb = model_mem_usage // 2**30
         mb = (model_mem_usage % 2**30) // 2**20
-        kb = ((model_mem_usage % 2**30) % 2**20) // 2**10
-        b = ((model_mem_usage % 2**30) % 2**20) % 2**10
-        print(f"Total size model: {gb:,} GB, {mb:,} MB, {kb:,} KB, {b:,} B ({model_mem_usage:,} total bytes)")
+        kb = (model_mem_usage % 2**20) // 2**10
+        b = model_mem_usage % 2**10
+        print(f"Total size model: {gb:,} GB, {mb:,} MB, {kb:,} KB, {b:,} B ({model_mem_usage:,} Bytes)")
