@@ -137,9 +137,9 @@ class SPN(object):
             self.columns = data.columns
             pairwise_corr = rdc(rdc_features=features, sample_size=2e3)
             # pairwise_corr = data.corr(method='spearman').abs().values
-            # thresh = corr_threshold + (max(0, 0.5 - corr_threshold) / 10) * level # maximum depth is 10
+            thresh = corr_threshold + (max(0, 0.5 - corr_threshold) / 8) * level # relax threshold
             # print(pairwise_corr, thresh)
-            components, indices = decompose(data, features, pairwise_corr, corr_thresh=corr_threshold, min_cluster=min_cluster, keys=keys)
+            components, indices = decompose(data, features, pairwise_corr, corr_thresh=thresh, min_cluster=min_cluster, keys=keys)
             if len(components) > 1:
                 if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'product node {tuple(data.columns)}{data.shape}')
                 level += 1
