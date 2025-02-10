@@ -97,7 +97,7 @@ class CountEstimator(object):
                 new_exact_hi = self.exact_hi * other
                 # new_exact_hi[(0 < new_exact_hi) & (new_exact_hi < 1)] = 1
                 new_sketch_hi = self.sketch_hi * other
-                new_sketch_hi[new_sketch_hi < 1] = 1
+                # new_sketch_hi[new_sketch_hi < 1] = 1
                 # new_sketch_hi[(-1 < new_sketch_hi) & (new_sketch_hi < 0)] = -1
                 # new_sketch_hi[(0 < new_sketch_hi) & (new_sketch_hi < 1)] = 1
                 return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
@@ -225,11 +225,19 @@ class DegreeEstimator(CountEstimator):
                 new_sketch_hi = self.sketch_hi * other.sketch_hi
             return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
         elif isinstance(other, (int, float)):
-            # do not scale, just copy self
-            new_sketch_lo = self.sketch_lo
+            if other != 0:
+                # do not scale, just copy self
+                new_sketch_lo = self.sketch_lo
+            else:
+                new_sketch_lo = self.sketch_lo * other
             if self.is_bifocal:
-                new_exact_hi = self.exact_hi
-                new_sketch_hi = self.sketch_hi
+                if other != 0:
+                    # do not scale, just copy self
+                    new_exact_hi = self.exact_hi
+                    new_sketch_hi = self.sketch_hi
+                else:
+                    new_exact_hi = self.exact_hi * other
+                    new_sketch_hi = self.sketch_hi * other
                 return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
             return type(self)(new_sketch_lo)
         return NotImplemented
@@ -245,6 +253,10 @@ class DegreeEstimator(CountEstimator):
                 self.sketch_hi *= other.sketch_hi
             return self
         elif isinstance(other, (int, float)):
-            # do not scale, just return self
+            if other == 0:
+                self.sketch_lo *= 0
+                if self.is_bifocal:
+                    self.exact_hi *= 0
+                    self.sketch_hi *= 0
             return self
         return NotImplemented

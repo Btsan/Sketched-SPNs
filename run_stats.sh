@@ -1,26 +1,23 @@
-#!/bin/bash
+for method in estimates/stats*.txt; do
+    base=$(basename ${method%.*})
+    echo $base
 
-clusters=(1 5e-1 1e-1 5e-2 1e-2)
-widths=(4096 1e4 1e5)
+    if [ ! -f runtimes/$base.log ]; then
+        echo "Processing "$method
 
-for c in "${clusters[@]}"
-do
-    for w in "${widths[@]}"
-    do
-        echo "running Stats-CEB: min. cluster = "$c" sketch width = "$w
-        echo .
-        echo .
-        echo .
-
-        python3 sketched_spn.py \
-        --depth 5 \
-        --width $w \
-        --data ./End-to-End-CardEst-Benchmark-master/datasets/stats_simplified/ \
-        --workload ./stats_CEB_sub_queries_corrected.sql \
-        --experiment stats-ceb \
-        --independence 128 \
-        --min_cluster $c \
-        --writefile "./stats-ceb_"$w"_min"$c"_times.csv" \
-        > "./stats-ceb_"$w"_min"$c"_times.log"
-    done
+        psql \
+        -d stats \
+        -U postgres \
+        -c "SET ml_joinest_fname='"$method"';" \
+        -f prefix.sql \
+        -f stats_CEB.sql \
+        &> "runtimes/"$base".log"
+        
+        sleep 11
+    else
+        echo "Skipping "$method" as runtimes/"$base".log already exists"
+    fi
+    echo "runtimes/"$base".log: "$(grep -Eo "Time" "runtimes/"$base".log" | wc -l)" query execution times"
+    echo "Total execution time: "$(grep -Eo "[0-9]+(.[0-9]+) ms" "runtimes/"$base".log" | awk '{sum += $1} END {print sum / 1e3 /60 / 60" hrs"}')
 done
+# docker exec -it -w /var/lib/pgsql/13.1/data/ ce-benchmark bash

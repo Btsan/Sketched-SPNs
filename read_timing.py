@@ -7,7 +7,7 @@ def main():
         print(idx + 1, line)
         if line.endswith("ms"):
             total += float(line[:-2])
-    print(f"{total:,.2f} milliseconds = {total / 1000:,.2f} seconds = {total / 60000:,.2f} minutes = {total / 3600000:,.2f} hours")
+    print(f"{total:,.2f} milliseconds = {total / 1e3:,.3f} seconds = {total / 60e3:,.3f} minutes = {total / 3600e3:,.3f} hours")
 
 if __name__ == "__main__":
     main()

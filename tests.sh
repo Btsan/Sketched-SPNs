@@ -31,9 +31,9 @@ mkdir -p ./tests/
 #                         --pessimistic \
 #                         --cuda &> tests/bound_sketch.log
 
-clusters=(5e-2 1e-2)
-widths=(1e5 1e6)
-decompose=(5e-2 1e-2)
+clusters=(2e-1 1e-1 5e-2 1e-2) # must be in scientific notation
+widths=(1e4 1e5 1e6)
+decompose=(3e-1 2e-1 1e-1) # must be in scientific notation
 
 for w in "${widths[@]}"
 do
@@ -54,6 +54,7 @@ do
             --pickle ./features/ \
             --independence 32 \
             --min_cluster $c \
+            --decompose $d \
             --method count-sketch \
             --writefile $filename"_count.csv" \
             --cuda \
@@ -65,6 +66,7 @@ do
             --pickle ./features/ \
             --independence 32 \
             --min_cluster $c \
+            --decompose $d \
             --method count-sketch \
             --pessimistic \
             --writefile $filename"_count_pessimistic.csv" \
@@ -77,6 +79,7 @@ do
             --pickle ./features/ \
             --independence 32 \
             --min_cluster $c \
+            --decompose $d \
             --method bound-sketch \
             --writefile $filename"_bound.csv" \
             --cuda \
@@ -88,6 +91,7 @@ do
             --pickle ./features/ \
             --independence 32 \
             --min_cluster $c \
+            --decompose $d \
             --method bound-sketch \
             --pessimistic \
             --writefile $filename"_bound_pessimistic.csv" \

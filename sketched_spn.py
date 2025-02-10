@@ -340,9 +340,6 @@ if __name__ == '__main__':
 
     if args.method == 'ams':
         args.width = 1
-    
-    # if args.method in ('bound-sketch', 'count-min'):
-    #     args.pessimistic = True
 
     num_components = len(tables) - 1 # this suffices for acyclic joins
     bin_hashes = [BinHash(args.depth, args.width) for _ in range(num_components)]
@@ -452,7 +449,7 @@ if __name__ == '__main__':
 
         workload = workload[workload['num_tables'] > 0]
 
-        drop = ['min']
+        drop = ['std', 'min']
         pctl = [0.25, 0.5, 0.75, 0.9]
 
         workload.to_csv(args.writefile, index=False)
@@ -483,11 +480,8 @@ if __name__ == '__main__':
 
         # compute memory usage due to sketches after running workload
         model_mem_usage = sum([model.memory_usage() for model in models.values()])
-
-        print(f"Total size model: {model_mem_usage:,.2f} Bytes = {model_mem_usage / 2**10:,.2f} KB = {model_mem_usage / 2**20:,.2f} = {model_mem_usage / 2**30:,.2f}")
-
         gb = model_mem_usage // 2**30
         mb = (model_mem_usage % 2**30) // 2**20
         kb = (model_mem_usage % 2**20) // 2**10
         b = model_mem_usage % 2**10
-        print(f"Total size model: {gb:,} GB, {mb:,} MB, {kb:,} KB, {b:,} B ({model_mem_usage:,} Bytes)")
+        print(f"Total model size: {gb:,} GiB  {mb:,} MiB  {kb:,} KiB  {b:,} B  (Total {model_mem_usage:,} bytes)")
