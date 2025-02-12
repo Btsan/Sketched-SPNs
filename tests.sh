@@ -32,8 +32,8 @@ mkdir -p ./tests/
 #                         --cuda &> tests/bound_sketch.log
 
 clusters=(2e-1 1e-1 5e-2 1e-2) # must be in scientific notation
-widths=(1e4 1e5 1e6)
-decompose=(3e-1 2e-1 1e-1) # must be in scientific notation
+widths=(1e4)
+decompose=(5e-2 1e-2) # must be in scientific notation
 
 for w in "${widths[@]}"
 do
