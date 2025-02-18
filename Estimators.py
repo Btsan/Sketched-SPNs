@@ -8,9 +8,21 @@ class CountEstimator(object):
         self.shape = sketch_lo.shape
 
         # hi-freq estimation componenent for bifocal estimator
-        self.is_bifocal = sketch_hi is not None and exact_hi is not None
-        self.exact_hi = exact_hi
-        self.sketch_hi = sketch_hi
+        if sketch_hi is not None and exact_hi is not None:
+            self.is_bifocal = True
+            self.exact_hi = exact_hi.copy()
+            self.sketch_hi = sketch_hi
+        else:
+            self.is_bifocal = False
+            self.exact_hi = None
+            self.sketch_hi = None
+
+    def cuda(self):
+        new_sketch_lo = self.sketch_lo.cuda()
+        if self.is_bifocal:
+            new_sketch_hi = self.sketch_hi.cuda()
+            return type(self)(new_sketch_lo, new_sketch_hi, self.exact_hi)
+        return type(self)(new_sketch_lo)
 
     def memory_usage(self):
         nbytes = self.sketch_lo.numel() * self.sketch_lo.element_size()

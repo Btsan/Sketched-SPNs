@@ -214,7 +214,7 @@ class CountSketch(object):
             nbytes += estimator.memory_usage()
         return nbytes
     
-    def __call__(self, predicates:dict, keys:dict, components:dict, **kwargs):
+    def __call__(self, predicates:dict, keys:dict, components:dict, cuda : bool = False, **kwargs):
         """
         returns:
             the selectivity of the predicates (float) or the sketch of the keys (Estimator)
@@ -254,6 +254,8 @@ class CountSketch(object):
                         bins_lo += self.bin_hashes[components[key]](values)
                         for join_idx in join_indices:
                             signs_lo *= self.sign_hashes[join_idx](values)
+                        # mask = sel_lo[key].notnull().values[None, :] # [1, N]
+                        # signs_lo *= mask
                     assert bins_lo.shape == signs_lo.shape == (self.depth, max(1, len(sel_lo))), f"{bins_lo.shape} == {signs_lo.shape} == {(self.depth, len(sel_lo))}"
                     bins_lo %= self.width
                     signs_lo *= sel_lo['_count'].values[None, :]
@@ -269,10 +271,12 @@ class CountSketch(object):
                         signs_hi = 1
                         bins_hi = 0
                         for key, join_indices in keys.items():
-                            values = sel_hi[key].map(hash).values + 1
-                            bins_hi += self.bin_hashes[components[key]](values)
+                            values = sel_hi[key].map(hash).values + 1 # [N]
+                            bins_hi += self.bin_hashes[components[key]](values) # [depth, N]
                             for join_idx in join_indices:
-                                signs_hi *= self.sign_hashes[join_idx](values)
+                                signs_hi *= self.sign_hashes[join_idx](values) # [depth, N]
+                            # mask = sel_hi[key].notnull().values[None, :] # [1, N]
+                            # signs_hi *= mask
                         assert bins_hi.shape == signs_hi.shape == (self.depth, len(sel_hi)), f"{bins_hi.shape} == {signs_hi.shape} == {(self.depth, len(sel_hi))}"
                         bins_hi %= self.width
                         signs_hi *= sel_hi['_count'].values[None, :]
@@ -282,6 +286,8 @@ class CountSketch(object):
                     estimator = CountEstimator(sketch_lo)
                 t1 = perf_counter_ns()
                 sketch_time = (t1 - t0)
+                if cuda:
+                    return estimator.cuda(), sketch_time
                 return estimator, sketch_time
             else:
                 # return probability if not a join key attribute
@@ -291,6 +297,8 @@ class CountSketch(object):
         # check if sketch already exists
         sketch_id = frozenset(keys.items()).union(components.items())
         if not col_in_preds and sketch_id in self.saved:
+            if cuda:
+                return self.saved[sketch_id].cuda(), 0
             return deepcopy(self.saved[sketch_id]), 0
         
         # measure sketcching time
@@ -334,6 +342,8 @@ class CountSketch(object):
 
         if not col_in_preds:
             self.saved[sketch_id] = estimator
+        if cuda:
+            return estimator.cuda(), sketch_time
         return deepcopy(estimator), sketch_time
     
 class BoundSketch(object):
@@ -363,7 +373,7 @@ class BoundSketch(object):
             nbytes += estimator.memory_usage()
         return nbytes
     
-    def __call__(self, predicates:dict, keys:dict, components:dict, count=True, **kwargs):
+    def __call__(self, predicates:dict, keys:dict, components:dict, count: bool = True, cuda: bool = False, **kwargs):
         """
         returns:
             the selectivity of the predicates (float) or the sketch of the keys (Estimator)
@@ -403,6 +413,8 @@ class BoundSketch(object):
         sketch_id = frozenset(keys.items()).union(components.items()).union({('count', count)})
         if not col_in_preds and sketch_id in self.saved:
             estimator = self.saved[sketch_id]
+            if cuda:
+                return estimator.cuda(), 0
             return deepcopy(estimator), 0
         
         # measure sketcching time
@@ -448,4 +460,6 @@ class BoundSketch(object):
         # save sketch for reuse, if there were no predicates
         if not col_in_preds:
             self.saved[sketch_id] = estimator
+        if cuda:
+            return estimator.cuda(), sketch_time
         return deepcopy(estimator), sketch_time

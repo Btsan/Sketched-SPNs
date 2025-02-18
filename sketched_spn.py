@@ -161,7 +161,7 @@ def multiply_frequencies(node, query, id2series, visited=None, root=True):
             freq['_count'] *= freq[f"_count_{id}"]
     return freq
 
-def estimate(query, models, primary=None, cuda=False, method='count-sketch'):
+def estimate(query, models, primary=None, cuda=False, method='count-sketch', percentile=0.5):
     inference_times = []
     sketching_times = []
 
@@ -179,7 +179,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch'):
         print(f'{name} components', components)
 
         t0 = perf_counter_ns()
-        estimator, sketch_time = models[name](predicates, keys, components=components, count=use_count)
+        estimator, sketch_time = models[name](predicates, keys, components=components, count=use_count, cuda=cuda)
         t1 = perf_counter_ns()
         inference_times.append(t1 - t0 - sketch_time)
         sketching_times.append(sketch_time)
@@ -190,12 +190,11 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch'):
             use_count = False
         
         # print(estimator)
-        sketches_lo[id] = estimator.sketch_lo.cuda() if cuda else estimator.sketch_lo
+        sketches_lo[id] = estimator.sketch_lo # estimator.sketch_lo.cuda() if cuda else 
 
         if estimator.is_bifocal:
-            if cuda:
-                sketches_hi[id] = estimator.sketch_hi.cuda() if cuda else estimator.sketch_hi
-        exact_hi[id] = estimator.exact_hi
+            sketches_hi[id] = estimator.sketch_hi # estimator.sketch_hi.cuda() if cuda else 
+            exact_hi[id] = estimator.exact_hi
 
     total_inference = pd.Timedelta(sum(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
@@ -217,7 +216,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch'):
     if method in ('count-min', 'bound-sketch'):
         join_lo = sketch_estimates.min().item()
     else:
-        join_lo = max(0, sketch_estimates.quantile(0.5).item())
+        join_lo = sketch_estimates.quantile(percentile).item() # estimate may be negative but that's fine for join ordering
     print(f"lo estimate = {join_lo:,.2f}")
 
     join_hi = 0
@@ -248,7 +247,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch'):
                 if method in ('count-min', 'bound-sketch'):
                     join_hilo += sketch_estimates.sum(dim=1).min().item()
                 else:
-                    join_hilo += max(0, sketch_estimates.sum(dim=1).quantile(0.5).item())
+                    join_hilo += sketch_estimates.sum(dim=1).quantile(percentile).item()
         print(f"hi-lo estimates = {join_hilo:,.2f}")
 
     est = join_lo + join_hilo + join_hi
@@ -315,6 +314,7 @@ if __name__ == '__main__':
     parser.add_argument('--bifocal', default=0, type=int, help='number of heavy hitters to track per leaf node for bifocal estimation')
     parser.add_argument('--cuda', action='store_true', help='use GPU for estimation')
     parser.add_argument('--exact', action='store_true', help='use exact sketches (of pushdown selections) for estimation')
+    parser.add_argument('--percentile', default=0.5, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median')
     args = parser.parse_args()
     print(args)
 
@@ -422,7 +422,7 @@ if __name__ == '__main__':
             # for k, est in exact_estimates.items():
             #     workload.loc[i, k] = est
             #     workload.loc[i, k + '_err'] = max(est, row['cardinality']) / max(min(est, row['cardinality']), 1)
-            est, inference_time, sketching_time, estimation_time = estimate(query, models, primary=primary, cuda=args.cuda, method=args.method)
+            est, inference_time, sketching_time, estimation_time = estimate(query, models, primary=primary, cuda=args.cuda, method=args.method, percentile=args.percentile)
             name = f"{args.method}_{args.depth}x{args.width}{'_primary' * bool(primary)}"
             workload.loc[i, name] = est
             workload.loc[i, name + '_err'] = max(est, row['cardinality']) / max(min(est, row['cardinality']), 1)

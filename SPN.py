@@ -110,21 +110,34 @@ class SPN(object):
         #     # index = index.map(hash)
         #     features.iloc[:, :] = rdc(features, types)
         assert data.shape == features.shape, f'data {data.shape} mismatch with features {features.shape}'
+        # self.data = data # keep a reference to the data to check predicates during inference
 
+        if isinstance(data, pd.Series):
+            self.columns = {data.name,}
+            self.types = {data.name: data.dtype.type}
+            self.bounds = {data.name: (data.min(), data.max())}
+        else:
+            self.columns = set(data.columns)
+            self.types = dict()
+            self.bounds = dict()
+            for col in self.columns:
+                self.types[col] = data[col].dtype.type
+                self.bounds[col] = (data[col].min(), data[col].max())
+                
         # if verbose: print(f'keys {keys}')
         if len(data.shape) == 1 or len(data.columns) == 1:
-            if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'leaf node {data.name if type(data) is pd.Series else data.columns}{data.shape}', end='')
+            if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'leaf node {data.name if isinstance(data, pd.Series) else data.columns}{data.shape}', end='')
             level += 1
-            self.node = UnivariateLeaf(data, features,
+            self.node = UnivariateLeaf(data,
                                        bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal)
-            self.columns = [self.node.name]
+            # self.columns = [self.node.name]
             print(f'({self.node.memory:,} bytes)')
         elif set(data.columns) == set(keys):
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'join node {tuple(data.columns)}{data.shape}', end='')
             level += 1
-            self.node = JoinLeaf(data, features,
+            self.node = JoinLeaf(data,
                                  bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal)
-            self.columns = data.columns
+            # self.columns = data.columns
             print(f'({self.node.memory:,} bytes)')
         elif cluster_next:
             self.columns = data.columns
@@ -134,7 +147,7 @@ class SPN(object):
             self.node = SumNode(clusters, indices,
                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm)
         else:
-            self.columns = data.columns
+            # self.columns = data.columns
             pairwise_corr = rdc(rdc_features=features, sample_size=2e3)
             # pairwise_corr = data.corr(method='spearman').abs().values
             thresh = corr_threshold + (max(0, 0.5 - corr_threshold) / 8) * level # relax threshold
@@ -152,22 +165,47 @@ class SPN(object):
                 level += 1
                 self.node = SumNode(clusters, indices,
                                     bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm)
-        self.columns = set(self.columns)
+
+
         self.memory = self.node.memory
         return
     
     def memory_usage(self):
         return self.node.memory_usage()
 
-    # todo: rename key to sketch_attrs
     def __call__(self, predicates, key, **kwargs):
-        if not self.columns.intersection(predicates.keys()) and not self.columns.intersection(key):
+        col_in_preds = self.columns.intersection(predicates.keys())
+        col_in_keys = self.columns.intersection(key.keys())
+        if not col_in_preds and not col_in_keys:
             return 1, 0
+        elif col_in_preds:
+            # check if predicates are out of bounds
+            for col in col_in_preds:
+                t = self.types[col]
+                left, right = self.bounds[col]
+                for op, val in predicates[col].items():
+                    # print(f"col {col}, op {op}, val {type(val)}{val}, min {self.data[col].min()}, max {self.data[col].max()}")
+                    if op == '==':
+                        if t(val) < left or t(val) > right:
+                            return 0, 0
+                    elif op == '<':
+                        if t(val) <= left:
+                            return 0, 0
+                    elif op == '>':
+                        if t(val) >= right:
+                            return 0, 0
+                    elif op == '<=':
+                        if t(val) < left:
+                            return 0, 0
+                    elif op == '>=':
+                        if t(val) > right:
+                            return 0, 0
+            
         sketch_or_prob, sketch_time = self.node(predicates, key, **kwargs)
         return sketch_or_prob, sketch_time
 
 class UnivariateLeaf(object):
-    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0):
         if type(data) is pd.DataFrame:
             data = data[data.columns[0]]
         # self.data = data
@@ -208,11 +246,14 @@ class UnivariateLeaf(object):
         return self.sketch.memory_usage()
 
     def __call__(self, predicates, key, **kwargs):
+        t0 = perf_counter_ns()
         estimator, sketch_time = self.sketch(predicates, key, **kwargs)
+        t1 = perf_counter_ns()
+        sketch_time = (t1 - t0)
         return estimator, sketch_time
 
 class JoinLeaf(object):
-    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0):
         self.columns = set(data.columns)
         self.size = len(data)
 
@@ -243,7 +284,10 @@ class JoinLeaf(object):
         return self.sketch.memory_usage()
     
     def __call__(self, predicates, keys, **kwargs):
+        t0 = perf_counter_ns()
         estimator, sketch_time = self.sketch(predicates, keys, **kwargs)
+        t1 = perf_counter_ns()
+        sketch_time = (t1 - t0)
         return estimator, sketch_time
 
 class SumNode(object):
