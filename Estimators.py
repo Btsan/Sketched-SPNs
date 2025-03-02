@@ -181,6 +181,26 @@ class CountEstimator(object):
                 self.sketch_hi /= other
             return self
         return NotImplemented
+    
+    def __lt__(self, other):
+        if isinstance(other, (int, float)):
+            return self.total() < other
+        return NotImplemented
+    
+    def __le__(self, other):
+        if isinstance(other, (int, float)):
+            return self.total() <= other
+        return NotImplemented
+    
+    def __gt__(self, other):
+        if isinstance(other, (int, float)):
+            return self.total() > other
+        return NotImplemented
+    
+    def __ge__(self, other):
+        if isinstance(other, (int, float)):
+            return self.total() >= other
+        return NotImplemented
 
 class DegreeEstimator(CountEstimator):
 

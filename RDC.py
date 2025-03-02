@@ -15,23 +15,28 @@ def ecdf(X):
 
 def empirical_copula(data, types, max_discrete_dim=128, sample_size=-1, batch_size=10000):
     assert type(data) == pd.DataFrame
-    one_hot = OneHotEncoder()
+    one_hot = OneHotEncoder(max_categories=max_discrete_dim)
     if sample_size and 0 < sample_size < len(data):
         data = data.sample(n=sample_size)
     copula = dict()
     for col in data:
         features = data[col].values.reshape(-1, 1)
         if types[col] == 'DISCRETE':
-            features = one_hot.fit_transform(features)
-            if features.shape[-1] > max_discrete_dim:
-                # reduce embedding dimensionality with a random projection
-                gaussian = np.random.normal(size=(features.shape[-1], max_discrete_dim))
-                proj = []
-                for batch in range(0, features.shape[0], batch_size):
-                    proj.append(np.dot(features[batch:(batch + batch_size)].toarray(), gaussian))
-                features = np.concatenate(proj, axis=0)
+            if data[col].nunique() >= len(data) * 0.99:
+                # if all values are unique, randomly set all features
+                features = np.random.normal(size=(features.shape[0], max_discrete_dim))
             else:
-                features = features.toarray()
+                features = one_hot.fit_transform(features)
+                if features.shape[-1] > max_discrete_dim:
+                    # deprecated by setting OneHotEncoder max_categories
+                    # reduce embedding dimensionality with a random projection
+                    gaussian = np.random.normal(size=(features.shape[-1], max_discrete_dim))
+                    proj = []
+                    for batch in range(0, features.shape[0], batch_size):
+                        proj.append(np.dot(features[batch:(batch + batch_size)].toarray(), gaussian))
+                    features = np.concatenate(proj, axis=0)
+                else:
+                    features = features.toarray()
         copula[col] = ecdf(features)
     return copula
 

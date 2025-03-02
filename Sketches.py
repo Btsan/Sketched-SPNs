@@ -207,9 +207,12 @@ class CountSketch(object):
                 self.memory += hashes.numel() * hashes.element_size()
             for hashes in self.bins_lo[col]:
                 self.memory += hashes.numel() * hashes.element_size()
+        
+        # memory usage of pushdown (exact) sketches
+        self.pushdown = dict()
 
     def memory_usage(self):
-        nbytes = 0
+        nbytes = sum(self.pushdown.values())
         for estimator in self.saved.values():
             nbytes += estimator.memory_usage()
         return nbytes
@@ -222,13 +225,13 @@ class CountSketch(object):
         col_in_preds = self.columns.intersection(predicates.keys())
         col_in_keys = self.columns.intersection(keys.keys())
 
-
+        sketch_id = frozenset(keys.items()).union(components.items())
+        preds = []
         if not col_in_keys and not col_in_preds:
             # if no selection is needed and not a join key attribute, return 1
             return 1, 0
         elif col_in_preds:
             # otherwise, filter selection is needed
-            preds = []
             for col in col_in_preds:
                 for op, val in predicates[col].items():
                     if op == '=':
@@ -288,6 +291,8 @@ class CountSketch(object):
                 sketch_time = (t1 - t0)
                 if cuda:
                     return estimator.cuda(), sketch_time
+                pushdown_id = sketch_id.union(preds)
+                self.pushdown[pushdown_id] += estimator.memory_usage()
                 return estimator, sketch_time
             else:
                 # return probability if not a join key attribute
@@ -295,7 +300,6 @@ class CountSketch(object):
                 return prob, 0
 
         # check if sketch already exists
-        sketch_id = frozenset(keys.items()).union(components.items())
         if not col_in_preds and sketch_id in self.saved:
             if cuda:
                 return self.saved[sketch_id].cuda(), 0
@@ -366,9 +370,11 @@ class BoundSketch(object):
         self.saved = dict()
 
         self.memory = self.distincts_hi.memory_usage().sum() + self.distincts_lo.memory_usage().sum()
+
+        self.pushdown = dict()
     
     def memory_usage(self):
-        nbytes = 0
+        nbytes = sum(self.pushdown.values())
         for estimator in self.saved.values():
             nbytes += estimator.memory_usage()
         return nbytes
@@ -383,12 +389,12 @@ class BoundSketch(object):
         col_in_keys = self.columns.intersection(keys.keys())
 
 
+        preds = []
         if not col_in_keys and not col_in_preds:
             # if no selection is needed and not a join key attribute, return 1
             return 1, 0
         elif col_in_preds:
             # otherwise, filter selection is needed
-            preds = []
             for col in col_in_preds:
                 for op, val in predicates[col].items():
                     if op == '=':
@@ -410,7 +416,7 @@ class BoundSketch(object):
             sel_hi = self.distincts_hi
 
         # check if sketch already exists
-        sketch_id = frozenset(keys.items()).union(components.items()).union({('count', count)})
+        sketch_id = frozenset(keys.keys()).union(components.items()).union({('count', count)})
         if not col_in_preds and sketch_id in self.saved:
             estimator = self.saved[sketch_id]
             if cuda:
@@ -460,6 +466,9 @@ class BoundSketch(object):
         # save sketch for reuse, if there were no predicates
         if not col_in_preds:
             self.saved[sketch_id] = estimator
+        else:
+            pushdown_id = sketch_id.union(preds)
+            self.pushdown[pushdown_id] += estimator.memory_usage()
         if cuda:
             return estimator.cuda(), sketch_time
         return deepcopy(estimator), sketch_time

@@ -119,7 +119,7 @@ def hadamard(id2sketch):
 
 def multiply_frequencies(node, query, id2series, visited=None, root=True):
     """
-    This implementation could be improved to better handle primary keys, but suffices for now.
+    This implementation could be improved to better handle primary keys
     E.g., the heavy hitters of primary keys could be defined as the heavy hitters of corresponding foreign keys
     """
     if visited is None:
@@ -184,6 +184,14 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
         inference_times.append(t1 - t0 - sketch_time)
         sketching_times.append(sketch_time)
 
+        # double check before anythng else
+        if isinstance(estimator, float):
+            assert estimator == 0, estimator
+            return (0,
+                    pd.Timedelta(sum(inference_times), unit='ns'),
+                    pd.Timedelta(sum(sketching_times), unit='ns'),
+                    pd.Timedelta(0))
+        
         if method == 'bound-sketch':
             print(f"use_count={use_count} returns {type(estimator)}")
             assert (estimator.sketch_lo >= 0).all(), f"negative values in {name} lo sketch"
@@ -196,7 +204,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
             sketches_hi[id] = estimator.sketch_hi # estimator.sketch_hi.cuda() if cuda else 
             exact_hi[id] = estimator.exact_hi
 
-    total_inference = pd.Timedelta(sum(inference_times), unit='ns')
+    max_inference = pd.Timedelta(max(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
     use_bifocal = estimator.is_bifocal
     depth, width = estimator.shape[:2]
@@ -255,7 +263,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
     t1 = perf_counter_ns()
     estimation_time = pd.Timedelta(t1-t0, unit='ns')
     
-    return est, total_inference, total_sketching, estimation_time
+    return est, max_inference, total_sketching, estimation_time
 
 def compare_sketches(exact_sketches, approximate_sketches):
     assert set(node.name for node in exact_sketches) == set(node.name for node in approximate_sketches), f'{set(node.name for node in exact_sketches)} not match {set(node.name for node in approximate_sketches)}'
@@ -315,6 +323,7 @@ if __name__ == '__main__':
     parser.add_argument('--cuda', action='store_true', help='use GPU for estimation')
     parser.add_argument('--exact', action='store_true', help='use exact sketches (of pushdown selections) for estimation')
     parser.add_argument('--percentile', default=0.5, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median')
+    parser.add_argument('--kmeans', action='store_true', help='use kmeans to learn sum nodes')
     args = parser.parse_args()
     print(args)
 
@@ -371,38 +380,54 @@ if __name__ == '__main__':
                 for col in dates[table]:
                     dataset[col] = pd.to_datetime(dataset[col])
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-            print(f"Loaded {table} ({dataset.memory_usage(deep=True).sum():,} bytes) {delta.total_seconds():>25,.2f}s ({delta})", flush=True)
+            print(f"Loaded {table} ({dataset.memory_usage(deep=True).sum():,} bytes) {delta.total_seconds():>25,.2f}s ({delta})")
             print(dataset.describe().to_string(float_format="{:,.2f}".format))
             print(dataset.memory_usage(deep=True).to_string(float_format="{:,.2f}".format))
-
-            min_cluster = args.min_cluster if args.min_cluster > 1 else abs(args.min_cluster * len(dataset))
-
-            # extract features before training
-            ts = perf_counter_ns()
-            if args.pickle:
-                save_path = args.pickle / f"{table}.pkl"
-                if save_path.exists():
-                    rdc_features = pd.read_pickle(save_path)
-                    delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-                    print(f"Loaded pickled features from {save_path} ({delta})")
-                    assert len(rdc_features) == len(dataset), f"Features ({save_path}) do not match ({args.data/table}.csv)"
-                else:
-                    args.pickle.mkdir(parents=True, exist_ok=True)
-                    rdc_features = rdc_transform(dataset, meta['col_types'])
-                    delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-                    print(f"Extracted features from {table} ({delta})")
-                    save_path = f"{args.pickle}/{table}.pkl"
-                    rdc_features.to_pickle(save_path)
-            else:
-                rdc_features = rdc_transform(dataset, meta['col_types'])
-                delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-                print(f"Extracted features from {table} ({delta})")
 
             ts = perf_counter_ns()
             if args.exact:
                 models[table] = exact_sketch(dataset, bin_hashes=bin_hashes, sign_hashes=sign_hashes, bifocal=args.bifocal, method=args.method)
             else:
-                models[table] = SPN(dataset, rdc_features, bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=args.decompose, min_cluster=min_cluster, cluster_nbits=args.k, cluster_next=args.cluster_first, sparse=args.sparse, keys=meta['keys'], method=args.method, bifocal=args.bifocal, pessimistic=args.pessimistic)
+                # extract features before training
+                if args.pickle:
+                    save_path = args.pickle / f"{table}.pkl"
+                    if save_path.exists():
+                        rdc_features = pd.read_pickle(save_path)
+                        delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
+                        print(f"Loaded pickled features from {save_path} ({delta})")
+                        assert len(rdc_features) == len(dataset), f"Features ({save_path}) do not match ({args.data/table}.csv)"
+                    else:
+                        print(f"Extracting features from {table} ...", flush=True)
+                        args.pickle.mkdir(parents=True, exist_ok=True)
+                        rdc_features = rdc_transform(dataset, meta['col_types'])
+                        delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
+                        print(f"Extracted features from {table} ({delta})", flush=True)
+                        save_path = f"{args.pickle}/{table}.pkl"
+                        rdc_features.to_pickle(save_path)
+                else:
+                    print(f"Extracting features from {table} ...", flush=True)
+                    rdc_features = rdc_transform(dataset, meta['col_types'])
+                    delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
+                    print(f"Extracted features from {table} ({delta})", flush=True)
+                
+                # minimum size of clusters in sum nodes
+                min_cluster = args.min_cluster if args.min_cluster > 1 else abs(args.min_cluster * len(dataset))
+
+                # train on features
+                ts = perf_counter_ns()
+                models[table] = SPN(dataset, rdc_features, 
+                                    bin_hashes=bin_hashes, 
+                                    sign_hashes=sign_hashes, 
+                                    corr_threshold=args.decompose, 
+                                    min_cluster=min_cluster, 
+                                    cluster_nbits=args.k, 
+                                    cluster_next=args.cluster_first,
+                                    sparse=args.sparse, 
+                                    keys=meta['keys'], 
+                                    method=args.method, 
+                                    bifocal=args.bifocal, 
+                                    pessimistic=args.pessimistic, 
+                                    use_kmeans=args.kmeans)
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
             print(f"{'Hashed data' if args.exact else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MB) on {table} ({delta})", flush=True)
             training_times.append(delta)
@@ -425,7 +450,8 @@ if __name__ == '__main__':
             est, inference_time, sketching_time, estimation_time = estimate(query, models, primary=primary, cuda=args.cuda, method=args.method, percentile=args.percentile)
             name = f"{args.method}_{args.depth}x{args.width}{'_primary' * bool(primary)}"
             workload.loc[i, name] = est
-            workload.loc[i, name + '_err'] = max(est, row['cardinality']) / max(min(est, row['cardinality']), 1)
+            workload.loc[i, name + '_err'] = max(est, 1) / max(row['cardinality'], 1) if est >= row['cardinality'] else max(row['cardinality'], 1) / max(est, 1)
+            # max(max(est, 1), row['cardinality']) / max(min(abs(est), row['cardinality']), 1)
             query_time = pd.Timedelta(perf_counter_ns() - query_start, unit='ns')
             # similarities = compare_sketches(sketches_1, sketches_2)
             # for table, sim in similarities.items():
@@ -485,3 +511,5 @@ if __name__ == '__main__':
         kb = (model_mem_usage % 2**20) // 2**10
         b = model_mem_usage % 2**10
         print(f"Total model size: {gb:,} GiB  {mb:,} MiB  {kb:,} KiB  {b:,} B  (Total {model_mem_usage:,} bytes)")
+
+        print(f"End results for {args}")

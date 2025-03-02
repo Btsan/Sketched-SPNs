@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import BayesianGaussianMixture
+from sklearn.cluster import KMeans
 
 from RDC import rdc
 from Sketches import AMS, CountSketch, BoundSketch
@@ -38,7 +39,7 @@ def decompose(data, features, pairwise_corr, corr_thresh=0.3, min_cluster=1e5, t
     ungrouped = set(range(D))
     groups = []
 
-    adjacency_mat = pairwise_corr >= corr_thresh
+    adjacency_mat = pairwise_corr > corr_thresh
     # group of columns that have a dependency on any key(s)
     # must be computed before other groups
     if keys.intersection(data.columns):
@@ -64,17 +65,27 @@ def decompose(data, features, pairwise_corr, corr_thresh=0.3, min_cluster=1e5, t
     component_features = [features[g] for g in groups]
     return components, component_features
 
-def cluster(data, features, nbits=1, gmm=None):
+def cluster(data, features, nbits=1, gmm=None, max_sample_size=100000, use_kmeans=False):
     k = 2 ** nbits
     flattened = np.concatenate([np.stack(features[col]) for col in features], axis=-1)
     scaler = StandardScaler()
     scaled = scaler.fit_transform(flattened)
-    if gmm is None:
-        gmm = BayesianGaussianMixture(n_components=k).fit(scaled)
+    if scaled.shape[0] > max_sample_size:
+        rng = np.random.default_rng()
+        sample = rng.choice(scaled, size=max_sample_size, replace=False)
     else:
-        assert isinstance(gmm, BayesianGaussianMixture), "gmm must be a BayesianGaussianMixture"
-        gmm = gmm.fit(scaled)
-    labels = gmm.predict(scaled)[:, None]
+        sample = scaled
+    if use_kmeans:
+        kmeans = KMeans(n_clusters=k).fit(sample)
+        labels = kmeans.predict(scaled)[:, None]
+    else:
+        # default to EM
+        if gmm is None:
+            gmm = BayesianGaussianMixture(n_components=k).fit(sample)
+        else:
+            assert isinstance(gmm, BayesianGaussianMixture), "gmm must be a BayesianGaussianMixture"
+            gmm = gmm.fit(sample)
+        labels = gmm.predict(scaled)[:, None]
     uniques = np.unique(labels, axis=0)
     # assert len(uniques) <= k, f"Unexpectedly many clusters ({len(uniques)}): {uniques}"
 
@@ -88,7 +99,7 @@ def cluster(data, features, nbits=1, gmm=None):
 
     # in case, prevents failure to cluster
     if len(clusters) == 1:
-        print(f"K-Means only produced 1 unique label: {uniques}")
+        print(f"Clustering method only produced 1 unique label: {uniques}")
         print("Falling back to even splits")
         size = len(data) // k
         clusters = [data.iloc[i:i + size] for i in range(0, len(data), size)]
@@ -99,7 +110,7 @@ class SPN(object):
     """Mixed Sum-Product Networks (Molina et al., 2017)
     https://arxiv.org/pdf/1710.03297.pdf
     """
-    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, cluster_nbits=1, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None):
+    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, cluster_nbits=1, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None, use_kmeans=False):
         if keys is None:
             keys = set()
         self.size = len(data)
@@ -110,7 +121,6 @@ class SPN(object):
         #     # index = index.map(hash)
         #     features.iloc[:, :] = rdc(features, types)
         assert data.shape == features.shape, f'data {data.shape} mismatch with features {features.shape}'
-        # self.data = data # keep a reference to the data to check predicates during inference
 
         if isinstance(data, pd.Series):
             self.columns = {data.name,}
@@ -142,15 +152,22 @@ class SPN(object):
         elif cluster_next:
             self.columns = data.columns
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}')
-            clusters, indices, gmm = cluster(data, features, nbits=cluster_nbits, gmm=gmm)
+            clusters, indices, gmm = cluster(data, features, nbits=cluster_nbits, gmm=gmm, use_kmeans=use_kmeans)
             level += 1
             self.node = SumNode(clusters, indices,
-                                bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm)
+                                bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans)
         else:
             # self.columns = data.columns
-            pairwise_corr = rdc(rdc_features=features, sample_size=2e3)
+            if data.shape[0] <= max(1, min_cluster):
+                # skip rdc calculation
+                pairwise_corr = np.eye(data.shape[1])
+            else:
+                max_sample_size = 10000
+                min_sample_size = 1000
+                sample_size = min(max(len(features) // 10, min_sample_size), max_sample_size)
+                pairwise_corr = rdc(rdc_features=features.sample(sample_size) if len(features) > sample_size else features)
             # pairwise_corr = data.corr(method='spearman').abs().values
-            thresh = corr_threshold + (max(0, 0.5 - corr_threshold) / 8) * level # relax threshold
+            thresh = corr_threshold + (0.25 * level // 5) # relax threshold
             # print(pairwise_corr, thresh)
             components, indices = decompose(data, features, pairwise_corr, corr_thresh=thresh, min_cluster=min_cluster, keys=keys)
             if len(components) > 1:
@@ -158,13 +175,13 @@ class SPN(object):
                 level += 1
                 self.node = ProductNode(components, indices, 
                                         bin_hashes=bin_hashes, sign_hashes=sign_hashes, 
-                                        corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic)
+                                        corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, use_kmeans=use_kmeans)
             else:
                 if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}')
-                clusters, indices, gmm = cluster(data, features, nbits=cluster_nbits, gmm=gmm)
+                clusters, indices, gmm = cluster(data, features, nbits=cluster_nbits, gmm=gmm, use_kmeans=use_kmeans)
                 level += 1
                 self.node = SumNode(clusters, indices,
-                                    bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm)
+                                    bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans)
 
 
         self.memory = self.node.memory
@@ -345,10 +362,10 @@ class ProductNode(object):
             if child.columns.intersection(key):
                 assert sketch is None, "Only one child may return a sketch in a product node"
                 sketch, sketch_time = child(predicates, key, **kwargs)
-                if sketch.total() < 1e-1:
+                if sketch < 1e-1:
                     # sketch is too small to scale
                     return sketch, sketch_time
-            elif min(probs) >= 1e-4 and child.columns.intersection(predicates.keys()):
+            elif min(probs) > 1e-10 and child.columns.intersection(predicates.keys()):
                 p, _ = child(predicates, key, **kwargs)
                 probs.append(p)
         prob = min(probs) if self.pessimistic else np.prod(probs).item()
