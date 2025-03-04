@@ -1,10 +1,8 @@
-from copy import deepcopy
 from itertools import combinations
 from collections import defaultdict
 from time import perf_counter_ns
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.fft import fft, ifft
 
@@ -34,8 +32,6 @@ class BinHash(object):
 
     def __call__(self, items: torch.Tensor) -> torch.Tensor:
         return self.fn.bin(torch.as_tensor(items), self.num_bins)
-    
-# from hashes import SignHash, BinHash ### uncomment for python alternative (~10x slower)
 
 def get_hashes(depth, width, k=4):
     binhashes = BinHash(depth, width, k=k)
@@ -430,7 +426,8 @@ if __name__ == '__main__':
                                     method=args.method, 
                                     bifocal=args.bifocal, 
                                     pessimistic=args.pessimistic, 
-                                    use_kmeans=args.kmeans)
+                                    use_kmeans=args.kmeans,
+                                    rdc_types=meta['col_types'])
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
             print(f"{'Hashed data' if args.exact_sketch else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MB) on {table} ({delta})", flush=True)
             training_times.append(delta)

@@ -2,7 +2,6 @@ from itertools import combinations
 
 import numpy as np      
 import pandas as pd
-from sklearn.cluster import KMeans
 from sklearn.cross_decomposition import CCA
 from sklearn.preprocessing import OneHotEncoder
 
@@ -13,7 +12,8 @@ def ecdf(X):
     r = np.nan_to_num(r, copy=False, nan=0) / len(X)
     return r
 
-def empirical_copula(data, types, max_discrete_dim=2048, sample_size=-1, batch_size=10000):
+# max_discrete_dim should increase with the number of distincts per column
+def empirical_copula(data, types, max_discrete_dim=512, sample_size=-1, batch_size=10000):
     assert type(data) == pd.DataFrame
     one_hot = OneHotEncoder(max_categories=max_discrete_dim)
     if sample_size and 0 < sample_size < len(data):
@@ -75,10 +75,11 @@ def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1
         for i, j in combinations(range(n_cols), 2):
             x = np.stack(rdc_features[rdc_features.columns[i]])
             y = np.stack(rdc_features[rdc_features.columns[j]])
+            # rdc_matrix[i, j] = rdc_matrix[j, i] = rdc_cca(x, y)
             var_x = np.var(x, axis=0).max()
             var_y = np.var(y, axis=0).max()
             # print(f"{rdc_features.columns[i]}: var_x {var_x}, {rdc_features.columns[j]}: var_y {var_y}")
-            # early stop if x or y has low variance
+            # early stop if x or y has low variance (e.g., lots of duplicates)
             if var_x < var_thresh or var_y < var_thresh:
                 rdc_matrix[i, j] = rdc_matrix[j, i] = 0
             else:

@@ -1,10 +1,8 @@
-from copy import deepcopy
 from itertools import combinations
 from collections import defaultdict
 from time import perf_counter_ns
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.fft import fft, ifft
 
@@ -40,8 +38,6 @@ class BinHash(object):
 
     def __call__(self, items: torch.Tensor) -> torch.Tensor:
         return self.fn.bin(torch.as_tensor(items), self.num_bins)
-    
-# from hashes import SignHash, BinHash ### uncomment for python alternative (~10x slower)
 
 def get_hashes(depth, width, k=4):
     binhashes = BinHash(depth, width, k=k)
