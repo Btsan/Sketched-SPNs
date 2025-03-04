@@ -15,3 +15,7 @@ Run the following script to download the Stats and IMDb datasets used to train S
 ```
 bash datasets.sh
 ```
+
+## Usage
+
+Launch training and evaluation with [sketched_spn.py](/sketched_spn.py).
