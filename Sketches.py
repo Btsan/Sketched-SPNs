@@ -211,13 +211,26 @@ class CountSketch(object):
         # memory usage of pushdown (exact) sketches
         self.pushdown = dict()
 
+        # Count-Min for predicate selectivity
+        self.countmins = {}
+        for col in self.columns:
+            values = distincts[col].map(hash).values + 1 # N
+            mask = distincts[col].notnull().values[None, :] # 1, N
+            bins = self.bin_hashes[0](values) # just use the first bin hash
+            counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
+            counts *= mask # don't count nulls
+            assert bins.shape == counts.shape == (self.depth, len(distincts)), f"{bins.shape} == {counts.shape} == {self.depth, len(distincts)}"
+            self.countmins[col] = torch.zeros((self.depth, self.width), dtype=torch.long).scatter_add_(1, bins, counts)
+
     def memory_usage(self):
         nbytes = sum(self.pushdown.values())
         for estimator in self.saved.values():
             nbytes += estimator.memory_usage()
+        for cm in self.countmins.values():
+            nbytes += cm.numel() * cm.element_size()
         return nbytes
     
-    def __call__(self, predicates:dict, keys:dict, components:dict, cuda : bool = False, **kwargs):
+    def __call__(self, predicates:dict, keys:dict, components:dict, cuda : bool = False, exact_prob : bool = False, **kwargs):
         """
         returns:
             the selectivity of the predicates (float) or the sketch of the keys (Estimator)
@@ -296,7 +309,23 @@ class CountSketch(object):
                 return estimator, sketch_time
             else:
                 # return probability if not a join key attribute
-                prob = (sel_lo['_count'].sum() + sel_hi['_count'].sum()) / self.nrows
+                if exact_prob:
+                    prob = (sel_lo['_count'].sum() + sel_hi['_count'].sum()) / self.nrows
+                else:
+                    # convert to count-min probability
+                    freq = torch.zeros((self.depth, self.width), dtype=torch.long)
+                    for col in col_in_preds:
+                        cm = torch.zeros((self.depth, self.width), dtype=torch.long)
+                        if len(sel_lo) > 0:
+                            values = sel_lo[col].map(hash).values + 1
+                            bins = self.bin_hashes[0](values) # depth, N
+                            cm = cm.scatter_add(1, bins, torch.ones(1, dtype=torch.long).expand_as(bins))
+                        if len(sel_hi) > 0:
+                            values = sel_lo[col].map(hash).values + 1
+                            bins = self.bin_hashes[0](values) # depth, N
+                            cm = cm.scatter_add(1, bins, torch.ones(1, dtype=torch.long).expand_as(bins))
+                        freq += self.countmins[col] * (cm > 0)
+                    prob = freq.sum(dim=-1).min().item() / self.nrows
                 return prob, 0
 
         # check if sketch already exists

@@ -13,7 +13,7 @@ def ecdf(X):
     r = np.nan_to_num(r, copy=False, nan=0) / len(X)
     return r
 
-def empirical_copula(data, types, max_discrete_dim=128, sample_size=-1, batch_size=10000):
+def empirical_copula(data, types, max_discrete_dim=2048, sample_size=-1, batch_size=10000):
     assert type(data) == pd.DataFrame
     one_hot = OneHotEncoder(max_categories=max_discrete_dim)
     if sample_size and 0 < sample_size < len(data):

@@ -3,7 +3,7 @@ from time import perf_counter_ns
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from sklearn.mixture import BayesianGaussianMixture
+from sklearn.mixture import GaussianMixture # BayesianGaussianMixture also works well
 from sklearn.cluster import KMeans
 
 from RDC import rdc
@@ -65,7 +65,7 @@ def decompose(data, features, pairwise_corr, corr_thresh=0.3, min_cluster=1e5, t
     component_features = [features[g] for g in groups]
     return components, component_features
 
-def cluster(data, features, nbits=1, gmm=None, max_sample_size=100000, use_kmeans=False):
+def cluster(data, features, nbits=1, gmm=None, max_sample_size=10000, use_kmeans=False):
     k = 2 ** nbits
     flattened = np.concatenate([np.stack(features[col]) for col in features], axis=-1)
     scaler = StandardScaler()
@@ -81,9 +81,9 @@ def cluster(data, features, nbits=1, gmm=None, max_sample_size=100000, use_kmean
     else:
         # default to EM
         if gmm is None:
-            gmm = BayesianGaussianMixture(n_components=k).fit(sample)
+            gmm = GaussianMixture(n_components=k).fit(sample)
         else:
-            assert isinstance(gmm, BayesianGaussianMixture), "gmm must be a BayesianGaussianMixture"
+            assert isinstance(gmm, GaussianMixture), type(gmm)
             gmm = gmm.fit(sample)
         labels = gmm.predict(scaled)[:, None]
     uniques = np.unique(labels, axis=0)
@@ -162,22 +162,21 @@ class SPN(object):
                 # skip rdc calculation
                 pairwise_corr = np.eye(data.shape[1])
             else:
-                max_sample_size = 10000
-                min_sample_size = 1000
-                sample_size = min(max(len(features) // 10, min_sample_size), max_sample_size)
+                sample_size = 10000
                 pairwise_corr = rdc(rdc_features=features.sample(sample_size) if len(features) > sample_size else features)
             # pairwise_corr = data.corr(method='spearman').abs().values
-            thresh = corr_threshold + (0.25 * level // 5) # relax threshold
+            # thresh = corr_threshold + (0.25 * level // 5) # relax threshold
             # print(pairwise_corr, thresh)
-            components, indices = decompose(data, features, pairwise_corr, corr_thresh=thresh, min_cluster=min_cluster, keys=keys)
+            min_corr = pairwise_corr.min()
+            components, indices = decompose(data, features, pairwise_corr, corr_thresh=corr_threshold, min_cluster=min_cluster, keys=keys)
             if len(components) > 1:
-                if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'product node {tuple(data.columns)}{data.shape}')
+                if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'product node {tuple(data.columns)}{data.shape}(min. corr={min_corr:.2f})')
                 level += 1
                 self.node = ProductNode(components, indices, 
                                         bin_hashes=bin_hashes, sign_hashes=sign_hashes, 
                                         corr_threshold=corr_threshold, min_cluster=min_cluster, cluster_nbits=cluster_nbits, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, use_kmeans=use_kmeans)
             else:
-                if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}')
+                if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}(min. corr={min_corr:.2f})')
                 clusters, indices, gmm = cluster(data, features, nbits=cluster_nbits, gmm=gmm, use_kmeans=use_kmeans)
                 level += 1
                 self.node = SumNode(clusters, indices,
@@ -195,6 +194,7 @@ class SPN(object):
         col_in_keys = self.columns.intersection(key.keys())
         if not col_in_preds and not col_in_keys:
             return 1, 0
+        """
         elif col_in_preds:
             # check if predicates are out of bounds
             for col in col_in_preds:
@@ -204,19 +204,25 @@ class SPN(object):
                     # print(f"col {col}, op {op}, val {type(val)}{val}, min {self.data[col].min()}, max {self.data[col].max()}")
                     if op == '==':
                         if t(val) < left or t(val) > right:
+                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
                             return 0, 0
                     elif op == '<':
                         if t(val) <= left:
+                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
                             return 0, 0
                     elif op == '>':
                         if t(val) >= right:
+                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
                             return 0, 0
                     elif op == '<=':
                         if t(val) < left:
+                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
                             return 0, 0
                     elif op == '>=':
                         if t(val) > right:
+                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
                             return 0, 0
+        """ # this optimization is causing errors on job-light (estimator returns 0)
             
         sketch_or_prob, sketch_time = self.node(predicates, key, **kwargs)
         return sketch_or_prob, sketch_time
@@ -362,10 +368,11 @@ class ProductNode(object):
             if child.columns.intersection(key):
                 assert sketch is None, "Only one child may return a sketch in a product node"
                 sketch, sketch_time = child(predicates, key, **kwargs)
-                if sketch < 1e-1:
+                if sketch == 0:
+                    # todo: this optimization might have caused errors measuring accuracy
                     # sketch is too small to scale
                     return sketch, sketch_time
-            elif min(probs) > 1e-10 and child.columns.intersection(predicates.keys()):
+            elif min(probs) > 0 and child.columns.intersection(predicates.keys()):
                 p, _ = child(predicates, key, **kwargs)
                 probs.append(p)
         prob = min(probs) if self.pessimistic else np.prod(probs).item()

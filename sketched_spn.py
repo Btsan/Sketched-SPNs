@@ -161,7 +161,7 @@ def multiply_frequencies(node, query, id2series, visited=None, root=True):
             freq['_count'] *= freq[f"_count_{id}"]
     return freq
 
-def estimate(query, models, primary=None, cuda=False, method='count-sketch', percentile=0.5):
+def estimate(query, models, primary=None, cuda=False, method='count-sketch', percentile=0.5, exact_prob=False):
     inference_times = []
     sketching_times = []
 
@@ -179,7 +179,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
         print(f'{name} components', components)
 
         t0 = perf_counter_ns()
-        estimator, sketch_time = models[name](predicates, keys, components=components, count=use_count, cuda=cuda)
+        estimator, sketch_time = models[name](predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
         t1 = perf_counter_ns()
         inference_times.append(t1 - t0 - sketch_time)
         sketching_times.append(sketch_time)
@@ -187,6 +187,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
         # double check before anythng else
         if isinstance(estimator, float):
             assert estimator == 0, estimator
+            print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
@@ -204,7 +205,8 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
             sketches_hi[id] = estimator.sketch_hi # estimator.sketch_hi.cuda() if cuda else 
             exact_hi[id] = estimator.exact_hi
 
-    max_inference = pd.Timedelta(max(inference_times), unit='ns')
+    # change to max when using parallelized inference
+    max_inference = pd.Timedelta(sum(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
     use_bifocal = estimator.is_bifocal
     depth, width = estimator.shape[:2]
@@ -321,9 +323,10 @@ if __name__ == '__main__':
     parser.add_argument('--pickle', default=None, type=Path, help='path to directory to save featurized data for faster subsequent runs')
     parser.add_argument('--bifocal', default=0, type=int, help='number of heavy hitters to track per leaf node for bifocal estimation')
     parser.add_argument('--cuda', action='store_true', help='use GPU for estimation')
-    parser.add_argument('--exact', action='store_true', help='use exact sketches (of pushdown selections) for estimation')
+    parser.add_argument('--exact_sketch', action='store_true', help='use exact sketches (of pushdown selections) for estimation')
     parser.add_argument('--percentile', default=0.5, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median')
     parser.add_argument('--kmeans', action='store_true', help='use kmeans to learn sum nodes')
+    parser.add_argument('--exact_preds', action='store_true', help='use exact selectivity of predicates in leaf nodes, instead of sketch estimate')
     args = parser.parse_args()
     print(args)
 
@@ -385,7 +388,7 @@ if __name__ == '__main__':
             print(dataset.memory_usage(deep=True).to_string(float_format="{:,.2f}".format))
 
             ts = perf_counter_ns()
-            if args.exact:
+            if args.exact_sketch:
                 models[table] = exact_sketch(dataset, bin_hashes=bin_hashes, sign_hashes=sign_hashes, bifocal=args.bifocal, method=args.method)
             else:
                 # extract features before training
@@ -429,7 +432,7 @@ if __name__ == '__main__':
                                     pessimistic=args.pessimistic, 
                                     use_kmeans=args.kmeans)
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-            print(f"{'Hashed data' if args.exact else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MB) on {table} ({delta})", flush=True)
+            print(f"{'Hashed data' if args.exact_sketch else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MB) on {table} ({delta})", flush=True)
             training_times.append(delta)
         total_training = sum(training_times, pd.Timedelta(0))
 
@@ -447,7 +450,7 @@ if __name__ == '__main__':
             # for k, est in exact_estimates.items():
             #     workload.loc[i, k] = est
             #     workload.loc[i, k + '_err'] = max(est, row['cardinality']) / max(min(est, row['cardinality']), 1)
-            est, inference_time, sketching_time, estimation_time = estimate(query, models, primary=primary, cuda=args.cuda, method=args.method, percentile=args.percentile)
+            est, inference_time, sketching_time, estimation_time = estimate(query, models, primary=primary, cuda=args.cuda, method=args.method, percentile=args.percentile, exact_prob=args.exact_preds)
             name = f"{args.method}_{args.depth}x{args.width}{'_primary' * bool(primary)}"
             workload.loc[i, name] = est
             workload.loc[i, name + '_err'] = max(est, 1) / max(row['cardinality'], 1) if est >= row['cardinality'] else max(row['cardinality'], 1) / max(est, 1)

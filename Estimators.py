@@ -32,10 +32,10 @@ class CountEstimator(object):
         return nbytes
     
     def total(self):
-        total = self.sketch_lo.sum().abs().item()
+        total = self.sketch_lo.abs().sum().item()
         if self.is_bifocal:
-            total += self.exact_hi.sum().abs().item()
-            total += self.sketch_hi.sum().abs().item()
+            total += self.exact_hi.abs().sum().item()
+            total += self.sketch_hi.abs().sum().item()
         return total
 
     def __repr__(self):
@@ -200,6 +200,11 @@ class CountEstimator(object):
     def __ge__(self, other):
         if isinstance(other, (int, float)):
             return self.total() >= other
+        return NotImplemented
+    
+    def __eq__(self, other):
+        if isinstance(other, (int, float)):
+            return self.total() == other
         return NotImplemented
 
 class DegreeEstimator(CountEstimator):
