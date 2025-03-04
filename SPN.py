@@ -110,7 +110,7 @@ class SPN(object):
     """Mixed Sum-Product Networks (Molina et al., 2017)
     https://arxiv.org/pdf/1710.03297.pdf
     """
-    def __init__(self, data, features=None, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, cluster_nbits=1, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None, use_kmeans=False, rdc_types=None):
+    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, cluster_nbits=1, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None, use_kmeans=False, rdc_types=None):
         if keys is None:
             keys = set()
         self.size = len(data)

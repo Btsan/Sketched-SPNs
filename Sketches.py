@@ -217,13 +217,15 @@ class CountSketch(object):
             values = distincts[col].map(hash).values + 1 # N
             mask = distincts[col].notnull().values[None, :] # 1, N
             # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
-            bins = bin_hashes[0](values)
+            bins = bin_hashes[0](values) % self.width
             counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
             counts *= mask # don't count nulls
             # assert bins.shape == counts.shape == (self.depth * len(bin_hashes), len(distincts)), \
             #     f"{bins.shape} == {counts.shape} == {self.depth * len(bin_hashes), len(distincts)}"
             assert bins.shape == counts.shape == (self.depth, len(distincts)), \
                 f"{bins.shape} == {counts.shape} == {self.depth, len(distincts)}"
+            # print(f"\n{col} {distincts['_count']}  counts {counts}")
+            # print(f"\nvalues {values} bins {bins}")
             # self.countmins[col] = torch.zeros((self.depth * len(bin_hashes), self.width), dtype=torch.long).scatter_add_(1, bins, counts)
             self.countmins[col] = torch.zeros((self.depth, self.width), dtype=torch.long).scatter_add_(1, bins, counts)
 
@@ -418,7 +420,7 @@ class BoundSketch(object):
             values = distincts[col].map(hash).values + 1 # N
             mask = distincts[col].notnull().values[None, :] # 1, N
             # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
-            bins = bin_hashes[0](values)
+            bins = bin_hashes[0](values) % self.width
             counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
             counts *= mask # don't count nulls
             # assert bins.shape == counts.shape == (self.depth * len(bin_hashes), len(distincts)), \
