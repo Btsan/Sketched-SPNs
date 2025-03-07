@@ -181,27 +181,42 @@ class Query(object):
         self.sql = sql
 
         self.joins = []
-        self.selects = defaultdict(lambda: defaultdict(lambda: dict()))
+        # self.selects = defaultdict(lambda: defaultdict(lambda: dict()))
+        self.selects = dict()
 
         for left, op, right, is_select in self.condition_iter():
             if is_select:
                 # self.selects.append((left, op, right))
                 alias, col = left.split('.')
+                # self.selects[alias][col][op] = right
+                if alias not in self.selects:
+                    self.selects[alias] = dict()
+                if col not in self.selects[alias]:
+                    self.selects[alias][col] = dict()
                 self.selects[alias][col][op] = right
             else:
                 self.joins.append((left, op, right))
 
         self.node2component, self.num_components = self.component_labeling(self.joins)
 
-        self.id2joined_attrs: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(list))
+        # self.id2joined_attrs: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(list))
+        self.id2joined_attrs: Dict[str, Dict[str, int]] = dict()
 
         for idx, join in enumerate(self.joins):
             left, _, right = join
 
             id, attr = left.split(".")
+            if id not in self.id2joined_attrs:
+                self.id2joined_attrs[id] = dict()
+            if attr not in self.id2joined_attrs[id]:
+                self.id2joined_attrs[id][attr] = list()
             self.id2joined_attrs[id][attr].append(idx)
 
             id, attr = right.split(".")
+            if id not in self.id2joined_attrs:
+                self.id2joined_attrs[id] = dict()
+            if attr not in self.id2joined_attrs[id]:
+                self.id2joined_attrs[id][attr] = list()
             self.id2joined_attrs[id][attr].append(idx)
         
         for id in self.id2joined_attrs:

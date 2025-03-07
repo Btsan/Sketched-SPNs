@@ -38,7 +38,7 @@ def get_hashes(depth, width, k=4):
     signhashes = SignHash(depth, k=k)
     return binhashes, signhashes
 
-def exact_sketch(data, bin_hashes=None, sign_hashes=None, bifocal=0, method='ams', convolutional=False):
+def exact_sketch(data, bin_hashes=None, sign_hashes=None, bifocal=0, method='count-sketch', convolutional=False):
     depth = bin_hashes[0].fn.seeds.shape[0]
     width = bin_hashes[0].num_bins
 
@@ -56,6 +56,7 @@ def exact_sketch(data, bin_hashes=None, sign_hashes=None, bifocal=0, method='ams
                              bifocal=bifocal,
                              convolutional=convolutional)
     else:
+        assert method == 'count-sketch'
         sketch = CountSketch(data,
                              depth,
                              width,
@@ -157,16 +158,17 @@ def multiply_frequencies(node, query, id2series, visited=None, root=True):
             freq['_count'] *= freq[f"_count_{id}"]
     return freq
 
-def estimate(query, models, primary=None, cuda=False, method='count-sketch', percentile=0.5, exact_prob=False):
+def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, exact_prob=False):
     inference_times = []
     sketching_times = []
+    copy_times = []
 
     exact_hi = dict()
     sketches_hi = dict()
     sketches_lo = dict()
     use_count = True
     for id, name in query.table_mapping_iter():
-        predicates = query.selects[id]
+        predicates = dict() if id not in query.selects else query.selects[id]
         keys = query.id2joined_attrs[id]
         components = dict()
         for attr in keys:
@@ -175,18 +177,20 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
         print(f'{name} components', components)
 
         t0 = perf_counter_ns()
-        estimator, sketch_time = models[name](predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
+        estimator, sketch_time, copy_time = models[name].iterative(predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
         t1 = perf_counter_ns()
-        inference_times.append(t1 - t0 - sketch_time)
+        inference_times.append(t1 - t0 - sketch_time - copy_time)
         sketching_times.append(sketch_time)
+        copy_times.append(copy_time)
 
         # double check before anythng else
-        if isinstance(estimator, float):
+        if isinstance(estimator, (int, float)):
             assert estimator == 0, estimator
             print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
+                    pd.Timedelta(sum(copy_times), unit='ns'),
                     pd.Timedelta(0))
         
         if method == 'bound-sketch':
@@ -195,17 +199,18 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
             use_count = False
         
         # print(estimator)
-        sketches_lo[id] = estimator.sketch_lo # estimator.sketch_lo.cuda() if cuda else 
+        sketches_lo[id] = estimator.sketch_lo if not cuda else estimator.sketch_lo.cuda()
 
         if estimator.is_bifocal:
-            sketches_hi[id] = estimator.sketch_hi # estimator.sketch_hi.cuda() if cuda else 
+            sketches_hi[id] = estimator.sketch_hi if not cuda else estimator.sketch_hi.cuda()
             exact_hi[id] = estimator.exact_hi
 
-    # change to max when using parallelized inference
+    # sum for total sequential inference time
+    # max for longest parallel inference time of all models
     max_inference = pd.Timedelta(sum(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
+    total_copying = pd.Timedelta(sum(copy_times), unit='ns')
     use_bifocal = estimator.is_bifocal
-    depth, width = estimator.shape[:2]
 
     t0 = perf_counter_ns()
 
@@ -222,7 +227,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
     if method in ('count-min', 'bound-sketch'):
         join_lo = sketch_estimates.min().item()
     else:
-        join_lo = sketch_estimates.quantile(percentile).item() # estimate may be negative but that's fine for join ordering
+        join_lo = sketch_estimates.quantile(percentile).item() # negative estimates are allowed
     print(f"lo estimate = {join_lo:,.2f}")
 
     join_hi = 0
@@ -261,18 +266,7 @@ def estimate(query, models, primary=None, cuda=False, method='count-sketch', per
     t1 = perf_counter_ns()
     estimation_time = pd.Timedelta(t1-t0, unit='ns')
     
-    return est, max_inference, total_sketching, estimation_time
-
-def compare_sketches(exact_sketches, approximate_sketches):
-    assert set(node.name for node in exact_sketches) == set(node.name for node in approximate_sketches), f'{set(node.name for node in exact_sketches)} not match {set(node.name for node in approximate_sketches)}'
-    aggregates = {}
-    for node_1, node_2 in zip(exact_sketches, approximate_sketches):
-        assert node_1.name == node_2.name, f'table nodes not aligned: {node_1.name} != {node_2.name}'
-        table = node_1.name
-        exact_sketch = node_1.sketch.to_dense()
-        approx_sketch = node_2.sketch.to_dense()
-        aggregates[table] = torch.nn.functional.cosine_similarity(exact_sketch, approx_sketch).mean().item()
-    return aggregates
+    return est, max_inference, total_sketching, total_copying, estimation_time
 
 if __name__ == '__main__':
     import argparse
@@ -282,45 +276,25 @@ if __name__ == '__main__':
     import experiments
     
     parser = argparse.ArgumentParser(description='run sketched sum-product networks on a workload')
-    parser.add_argument('--method', default='count-sketch', choices=['ams', 'count-sketch', 'count-min', 'bound-sketch'], type=str.lower, help='depth of sketches')
+    parser.add_argument('--method', default='count-sketch', choices=['count-sketch', 'count-min', 'bound-sketch'], type=str.lower, help='depth of sketches')
     parser.add_argument('--depth', default=5, type=lambda x: int(float(x)), help='depth of sketches')
-    parser.add_argument('--width', default=1024, type=lambda x: int(float(x)), help='width(s) of sketche (widths should be evenly divisible by smaller widths, if multiple are specified)')
-    parser.add_argument('--workload', default=Path('./stats_CEB_sub_queries_corrected.sql'), type=Path, help='CSV containing the format (subqueries || parent ID || cardinality)')
-    parser.add_argument('--data', default=Path('/ssd/btsan/stats_simplified/'), type=Path, help='path to directory of table files (as CSVs)')
+    parser.add_argument('--width', default=1000000, type=lambda x: int(float(x)), help='width of sketches')
+    parser.add_argument('--workload', default=Path('./workloads/stats_CEB_sub_queries_corrected.sql'), type=Path, help='CSV containing the format (subqueries || parent ID || cardinality)')
+    parser.add_argument('--data', default=Path('/ssd/btsan/stats_simplified/'), type=Path, help='path to directory containing table CSVs')
     parser.add_argument('--writefile', default=Path('out.csv'), type=Path, help='name of output csv file')
-    parser.add_argument('--k', default=1, type=int, help='each Sum Node partitions data into k**2 clusters')
-    parser.add_argument('--decompose', '--rdc_threshold', default=0.3, type=float, help='column pairs with rdc above this threshold are grouped')
-    parser.add_argument('--min_cluster', default=1e-2, type=float, help='stop partitioning when data (cluster) is smaller than min_cluster')
+    parser.add_argument('--k', default=2, type=int, help='each Sum Node partitions data into k>=2 clusters')
+    parser.add_argument('--decompose', '--rdc_threshold', default=1e-2, type=float, help='group columns with pairwise RDC above this threshold')
+    parser.add_argument('--min_cluster', default=1e-1, type=float, help='minimum clustering size for sum nodes, i.e., treated as a percentage if less than 1')
     parser.add_argument('--cluster_first', action='store_true', help='make the root layer a Sum Node (cluster data first) e.g., for large tables with few columns')
-    parser.add_argument('--primary', 
-                        default=['badges.Id',
-                                'posts.Id',
-                                'postLinks.Id',
-                                'postHistory.Id',
-                                'comments.Id',
-                                'tags.Id',
-                                'users.Id',
-                                'votes.Id']
-                        , nargs='*', type=str, help='name(s) of table attributes that are primary keys e.g., title.id')
-    parser.add_argument('--sparse', action='store_true', help='use sparse arrays for sketches, i.e., recommended if width >= 1e6')
-    parser.add_argument('--dates', nargs='*', 
-                        default=['badges.Date', 
-                                'comments.CreationDate', 
-                                'postHistory.CreationDate', 
-                                'postLinks.CreationDate', 
-                                'posts.CreationDate', 
-                                'users.CreationDate', 
-                                'votes.CreationDate'], 
-                        help='specify date columns (in table.col format)')
     parser.add_argument('--experiment', default='stats-ceb', choices=['job-light', 'stats-ceb'])
-    parser.add_argument('--find_keys', action='store_true', help='analyze columns in workload instead of running estimation e.g., to help prepare experimental setup')
-    parser.add_argument('--independence', default=4, type=int, help='use k-wise independent hashing (recommended k=2**n for n-way joins)')
-    parser.add_argument('--pessimistic', action='store_true', help='use pessimistic (probabilistic upper bound) sketch approximation')
+    parser.add_argument('--find_keys', action='store_true', help='analyze columns in workload instead of running estimation e.g., to prepare experimental config')
+    parser.add_argument('--independence', default=4, type=int, help='independence of k-universal hashing for sketches')
+    parser.add_argument('--pessimistic', action='store_true', help='use pessimistic sketch approximation')
     parser.add_argument('--pickle', default=None, type=Path, help='path to directory to save featurized data for faster subsequent runs')
-    parser.add_argument('--bifocal', default=0, type=int, help='number of heavy hitters to track per leaf node for bifocal estimation')
+    # parser.add_argument('--bifocal', default=0, type=int, help='number of heavy hitters to track per leaf node for bifocal estimation')
     parser.add_argument('--cuda', action='store_true', help='use GPU for estimation')
     parser.add_argument('--exact_sketch', action='store_true', help='use exact sketches (of pushdown selections) for estimation')
-    parser.add_argument('--percentile', default=0.5, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median')
+    parser.add_argument('--percentile', default=5e-1, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median (default) and 1 for max')
     parser.add_argument('--kmeans', action='store_true', help='use kmeans to learn sum nodes')
     parser.add_argument('--exact_preds', action='store_true', help='use exact selectivity of predicates in leaf nodes, instead of sketch estimate')
     args = parser.parse_args()
@@ -346,23 +320,19 @@ if __name__ == '__main__':
 
     primary, dates, tables = experiments.get_config(args.experiment)
 
-    if args.method == 'ams':
-        args.width = 1
-
     num_components = len(tables) - 1 # this suffices for acyclic joins
     bin_hashes = [BinHash(args.depth, args.width) for _ in range(num_components)]
     sign_hashes = [SignHash(args.depth, k=args.independence) for _ in range(num_components)]
 
     workload = get_workload(args.workload)
-    workload[f"{args.method}_{args.depth}x{args.width}{'_primary' * bool(primary)}"] = -1.0
-    workload[f"{args.method}_{args.depth}x{args.width}{'_primary' * bool(primary)}_err"] = -1.0
+    workload[f"{args.method}_{args.depth}x{args.width}"] = -1.0
+    workload[f"{args.method}_{args.depth}x{args.width}_err"] = -1.0
 
     workload['num_tables'] = 0
-    workload['join_attributes'] = 0
-    # workload['similarity'] = 0
-    # workload['exact_time'] = pd.Timedelta(0.0, unit='sec')
+    workload['join_components'] = 0
     workload['inference_time'] = pd.Timedelta(0.0, unit='sec')
     workload['sketching_time'] = pd.Timedelta(0.0, unit='sec')
+    workload['copy_overhead'] = pd.Timedelta(0.0, unit='sec')
     workload['estimation_time'] = pd.Timedelta(0.0, unit='sec')
     workload['total_time'] = pd.Timedelta(0.0, unit='sec')
     workload = workload.copy()
@@ -383,10 +353,10 @@ if __name__ == '__main__':
             print(dataset.describe().to_string(float_format="{:,.2f}".format))
             print(dataset.memory_usage(deep=True).to_string(float_format="{:,.2f}".format))
 
-            ts = perf_counter_ns()
             if args.exact_sketch:
-                models[table] = exact_sketch(dataset, bin_hashes=bin_hashes, sign_hashes=sign_hashes, bifocal=args.bifocal, method=args.method)
+                models[table] = exact_sketch(dataset, bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=args.method)
             else:
+                ts = perf_counter_ns()
                 # extract features before training
                 if args.pickle:
                     save_path = args.pickle / f"{table}.pkl"
@@ -419,17 +389,14 @@ if __name__ == '__main__':
                                     sign_hashes=sign_hashes, 
                                     corr_threshold=args.decompose, 
                                     min_cluster=min_cluster, 
-                                    cluster_nbits=args.k, 
+                                    num_clusters=args.k, 
                                     cluster_next=args.cluster_first,
-                                    sparse=args.sparse, 
                                     keys=meta['keys'], 
                                     method=args.method, 
-                                    bifocal=args.bifocal, 
                                     pessimistic=args.pessimistic, 
-                                    use_kmeans=args.kmeans,
-                                    rdc_types=meta['col_types'])
+                                    use_kmeans=args.kmeans,)
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
-            print(f"{'Hashed data' if args.exact_sketch else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MB) on {table} ({delta})", flush=True)
+            print(f"{'Hashed data' if args.exact_sketch else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MiB) on {table} ({delta})", flush=True)
             training_times.append(delta)
         total_training = sum(training_times, pd.Timedelta(0))
 
@@ -443,25 +410,18 @@ if __name__ == '__main__':
 
             print(f"{i}: {query} ({row['cardinality']:,})")
             
-            # exact_estimates, sketches_1, exact_time = exact(exact_sketches, nodes, edges, args.width, primary=primary, same_sign=(num_components == 1)) 
-            # for k, est in exact_estimates.items():
-            #     workload.loc[i, k] = est
-            #     workload.loc[i, k + '_err'] = max(est, row['cardinality']) / max(min(est, row['cardinality']), 1)
-            est, inference_time, sketching_time, estimation_time = estimate(query, models, primary=primary, cuda=args.cuda, method=args.method, percentile=args.percentile, exact_prob=args.exact_preds)
-            name = f"{args.method}_{args.depth}x{args.width}{'_primary' * bool(primary)}"
+            est, inference_time, sketching_time, copying_time, estimation_time = estimate(query, models, cuda=args.cuda, method=args.method, percentile=args.percentile, exact_prob=args.exact_preds)
+            name = f"{args.method}_{args.depth}x{args.width}"
             workload.loc[i, name] = est
             workload.loc[i, name + '_err'] = max(est, 1) / max(row['cardinality'], 1) if est >= row['cardinality'] else max(row['cardinality'], 1) / max(est, 1)
             # max(max(est, 1), row['cardinality']) / max(min(abs(est), row['cardinality']), 1)
             query_time = pd.Timedelta(perf_counter_ns() - query_start, unit='ns')
-            # similarities = compare_sketches(sketches_1, sketches_2)
-            # for table, sim in similarities.items():
-            #     print(f'sketch of table {table} has approximation similarity {sim}')
 
-            # workload.loc[i, 'similarity'] = sum(similarities.values()) / len(similarities)
             workload.loc[i, 'num_tables'] = len(nodes)
-            workload.loc[i, 'join_attributes'] = num_components
+            workload.loc[i, 'join_components'] = num_components
             workload.loc[i, 'inference_time'] = inference_time
             workload.loc[i, 'sketching_time'] = sketching_time
+            workload.loc[i, 'copy_overhead'] = copying_time
             workload.loc[i, 'estimation_time'] = estimation_time
             workload.loc[i, 'total_time'] = query_time
 
@@ -481,27 +441,29 @@ if __name__ == '__main__':
         workload.to_csv(args.writefile, index=False)
         print(workload[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
 
-        print('\nEquality predicates only:')
+        print('\nEquality only:')
         print(workload.query("not `query`.str.contains('>') and not `query`.str.contains('<')", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
 
-        print('\nRange predicates only:')
+        print('\nRange included:')
         print(workload.query("`query`.str.contains('>') or `query`.str.contains('<')", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
 
-        print('\nSingle-attribute Joins only:')
-        print(workload.query("`join_attributes` == 1", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
+        print('\nTransitive Joins only:')
+        print(workload.query("`join_components` == 1", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
 
-        print('\nMulti-attribute Joins only:')
-        print(workload.query("`join_attributes` > 1", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
+        print('\nNon-Transitive Joins only:')
+        print(workload.query("`join_components` > 1", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
 
         # todo: iterate over distincts instead of the range
         for i in range(workload['num_tables'].min(), workload['num_tables'].max() + 1):
             print(f'\n{i}-way Joins:')
             print(workload.query(f"`num_tables` == {i}", engine='python')[cols].describe(percentiles=pctl).transpose().drop(columns=drop).to_string(float_format="{:,.2f}".format))
 
-        print(f"\nTotal Model Training Time: {total_training} (average {total_training / len(models)})")
-        print(f"Total Sketching Time: {workload['sketching_time'].sum()} (average {workload['sketching_time'].mean()})")
-        print(f"Total Model Inference Time: {workload['inference_time'].sum()} (average {workload['inference_time'].mean()})")
-        print(f"Total Estimation Time: {workload['estimation_time'].sum()} (average {workload['estimation_time'].mean()})")
+        print(f"\nTotal Sketching Time: {workload['sketching_time'].sum()} (average {workload['sketching_time'].mean()})")
+        if not args.exact_sketch:
+            print(f"Total Model Training Time: {total_training} (average {total_training / len(models)})")
+            print(f"Total Model Inference Time: {workload['inference_time'].sum()} (average {workload['inference_time'].mean()})")
+            print(f"Total Model Copying Overhead: {workload['copy_overhead'].sum()} (average {workload['copy_overhead'].mean()})")
+        print(f"Total Estimation Time: {workload['estimation_time'].sum()} (average {workload['copy_overhead'].mean()})")
         print(f"Total Workload Time: {workload['total_time'].sum()} (average {workload['total_time'].mean()})")
 
         # compute memory usage due to sketches after running workload
@@ -510,6 +472,6 @@ if __name__ == '__main__':
         mb = (model_mem_usage % 2**30) // 2**20
         kb = (model_mem_usage % 2**20) // 2**10
         b = model_mem_usage % 2**10
-        print(f"Total model size: {gb:,} GiB  {mb:,} MiB  {kb:,} KiB  {b:,} B  (Total {model_mem_usage:,} bytes)")
+        print(f"Total memory usage: {gb:,} GiB  {mb:,} MiB  {kb:,} KiB  {b:,} B  (Total {model_mem_usage:,} bytes)")
 
         print(f"End results for {args}")
