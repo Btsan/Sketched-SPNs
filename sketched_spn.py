@@ -1,4 +1,3 @@
-from itertools import combinations
 from collections import defaultdict
 from time import perf_counter_ns
 from pathlib import Path
@@ -67,25 +66,6 @@ def exact_sketch(data, bin_hashes=None, sign_hashes=None, bifocal=0, method='cou
 
     return sketch
 
-def compass_estimate(query, id2sketch):
-    id2einsum_indices = defaultdict(lambda: [...])
-
-    for idx, join in enumerate(query.joins):
-        left, _, right = join
-        id = left.split('.')[0]
-        id2einsum_indices[id].append(idx)
-
-        id = right.split('.')[0]
-        id2einsum_indices[id].append(idx)
-
-    einsum_args = []
-    for id in id2sketch:
-        einsum_args.append(id2sketch[id])
-        einsum_args.append(id2einsum_indices[id])
-
-    einsum_args.append([...])
-    return torch.einsum(*einsum_args)
-
 def cross_correlate(node, query, id2sketch, visited=None):
     if visited is None:
         visited = set()
@@ -107,64 +87,11 @@ def cross_correlate(node, query, id2sketch, visited=None):
         sketch = sketch * cross_correlate(joined_node, query, id2sketch, visited=visited)
     return sketch
 
-def hadamard(id2sketch):
-    estimates = 1
-    for sketch in id2sketch.values():
-        estimates = estimates * sketch
-
-    return estimates
-
-def multiply_frequencies(node, query, id2series, visited=None, root=True):
-    """
-    This implementation could be improved to better handle primary keys
-    E.g., the heavy hitters of primary keys could be defined as the heavy hitters of corresponding foreign keys
-    """
-    if visited is None:
-        visited = set()
-    id, key = node.split('.')
-    visited.add(node)
-
-    freq = id2series[id].reset_index(name=f"_count_{id}")
-
-    for other_node in query.joined_nodes(id):
-        if other_node == node:
-            continue
-
-        other_id, other_key = other_node.split('.')
-        assert id == other_id
-        visited.add(other_node)
-
-        for joined_node in query.joined_with(other_node):
-            joined_id, joined_key = joined_node.split('.')
-            assert other_id != joined_id
-            
-            tmp = multiply_frequencies(joined_node, query, id2series, visited, root=False)
-
-            assert other_key in freq.columns, f"{other_node} missing in {freq.columns}"
-            assert joined_key in tmp.columns, f'{joined_node} missing in {tmp.columns}'
-            freq = pd.merge(freq, tmp, left_on=other_key, right_on=joined_key, suffixes=(None, f"_{joined_id}")).dropna(subset=other_key)
-
-    for joined_node in query.joined_with(node).difference(visited):
-        tmp = multiply_frequencies(joined_node, query, id2series, visited, root=False)
-        joined_id, joined_key = joined_node.split('.')
-        assert key in freq.columns, f"{node} missing in {freq.columns}"
-        assert joined_key in tmp.columns, f'{joined_node} missing in {tmp.columns}'
-
-        freq = pd.merge(freq, tmp, left_on=key, right_on=joined_key, suffixes=(None, joined_id)).dropna(subset=key)
-
-    if root:
-        freq['_count'] = 1.0
-        for id in id2series:
-            freq['_count'] *= freq[f"_count_{id}"]
-    return freq
-
 def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, exact_prob=False):
     inference_times = []
     sketching_times = []
     copy_times = []
 
-    exact_hi = dict()
-    sketches_hi = dict()
     sketches_lo = dict()
     use_count = True
     for id, name in query.table_mapping_iter():
@@ -201,10 +128,6 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
         # print(estimator)
         sketches_lo[id] = estimator.sketch_lo if not cuda else estimator.sketch_lo.cuda()
 
-        if estimator.is_bifocal:
-            sketches_hi[id] = estimator.sketch_hi if not cuda else estimator.sketch_hi.cuda()
-            exact_hi[id] = estimator.exact_hi
-
     # sum for total sequential inference time
     # max for longest parallel inference time of all models
     max_inference = pd.Timedelta(sum(inference_times), unit='ns')
@@ -217,51 +140,14 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
     start_node = query.random_node()
 
     # lo-freq estimate
-    if method in ('ams'):
-        sketch_estimates = hadamard(sketches_lo).sum(dim=1)
-    else:
-        sketch_estimates = cross_correlate(start_node, query, sketches_lo).sum(dim=1)
+    sketch_estimates = cross_correlate(start_node, query, sketches_lo).sum(dim=1)
     print(f'lo sketch estimates {sketch_estimates.shape}:')
     print(sketch_estimates)
 
     if method in ('count-min', 'bound-sketch'):
-        join_lo = sketch_estimates.min().item()
+        est = sketch_estimates.min().item()
     else:
-        join_lo = sketch_estimates.quantile(percentile).item() # negative estimates are allowed
-    print(f"lo estimate = {join_lo:,.2f}")
-
-    join_hi = 0
-    join_hilo = 0
-    if use_bifocal:
-        # hi-freq estimate
-        join_freq = multiply_frequencies(start_node, query, exact_hi)
-        join_hi = join_freq['_count'].sum()
-        print(f"hi estimates: {join_hi:,.2f}")
-
-        # hi-lo freq estimate
-        join_hilo = 0
-        for num_swaps in range(1, len(sketches_lo)):
-            for combo in combinations(sketches_lo.keys(), num_swaps):
-
-                # copy lo-freq sketches and replace some with hi-freq sketches
-                sketches_hilo = sketches_lo.copy()
-                # sketches_hilo = deepcopy(sketches_lo)
-                for id in combo:
-                    sketches_hilo[id] = sketches_hi[id]
-                    assert torch.count_nonzero(sketches_hilo[id]) == 0 or (sketches_hilo[id] != sketches_lo[id]).any(), "uh oh time to import deepccopy"
-
-                if method in ('ams'):
-                    sketch_estimates = hadamard(sketches_hilo)
-                else:
-                    sketch_estimates = cross_correlate(start_node, query, sketches_hilo)
-                    
-                if method in ('count-min', 'bound-sketch'):
-                    join_hilo += sketch_estimates.sum(dim=1).min().item()
-                else:
-                    join_hilo += sketch_estimates.sum(dim=1).quantile(percentile).item()
-        print(f"hi-lo estimates = {join_hilo:,.2f}")
-
-    est = join_lo + join_hilo + join_hi
+        est = sketch_estimates.quantile(percentile).item() # negative estimates are allowed
 
     t1 = perf_counter_ns()
     estimation_time = pd.Timedelta(t1-t0, unit='ns')

@@ -263,7 +263,7 @@ class SPN(object):
                     elif isinstance(node, ProductNode):
                         probs = [1]
                         sketch = None
-                        total_sketch_time = 0
+                        sketch_time = 0
                         for child in node.children:
                             sketch_or_prob, sketch_time = results.pop(child.node)
 
@@ -272,16 +272,15 @@ class SPN(object):
                             else:
                                 assert sketch == None
                                 sketch = sketch_or_prob
-                                total_sketch_time += sketch_time
                         prob = min(probs) if node.pessimistic else np.prod(probs).item()
                         assert 0 <= prob <= 1, f"probability {prob} out of bounds"
-                        results[node] = (sketch * prob if sketch is not None else prob, total_sketch_time)
+                        results[node] = (sketch * prob if sketch is not None else prob, sketch_time)
             else:
                 # leaf node
                 t0 = perf_counter_ns()
                 results[node] = node.sketch(predicates, key, **kwargs)
                 t1 = perf_counter_ns()
-                copy_time += t1 - t0
+                copy_time += t1 - t0 - results[node][1]
             
             # print()
         return *results[self.node], copy_time
