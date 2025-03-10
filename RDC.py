@@ -13,16 +13,16 @@ def ecdf(X):
     return r
 
 # max_discrete_dim should increase with the number of distincts per column
-def empirical_copula(data, types, max_discrete_dim=512, sample_size=-1, batch_size=10000):
+def empirical_copula(data, types, max_onehot_dim=2048, max_discrete_dim=128, sample_size=-1, batch_size=10000):
     assert type(data) == pd.DataFrame
-    one_hot = OneHotEncoder(max_categories=max_discrete_dim)
+    one_hot = OneHotEncoder(max_categories=max_onehot_dim)
     if sample_size and 0 < sample_size < len(data):
         data = data.sample(n=sample_size)
     copula = dict()
     for col in data:
         features = data[col].values.reshape(-1, 1)
         if types[col] == 'DISCRETE':
-            if data[col].nunique() >= len(data) * 0.99:
+            if data[col].nunique() >= len(data) * 0.95:
                 # if all values are unique, randomly set all features
                 features = np.random.normal(size=(features.shape[0], max_discrete_dim))
             else:
