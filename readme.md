@@ -10,6 +10,8 @@ pip3 install -r requirements.txt
 
 Optionally, install the KWiseHash package from [https://github.com/mikeheddes/fast-multi-join-sketch](https://github.com/mikeheddes/fast-multi-join-sketch/tree/c66c1486679f6eea4f78d703550050a83153360b/kwisehash).
 
+KWiseHash greatly reduces sketching time, especially when evaluating exact sketches. Otherwise, our Python implementation is used.
+
 ## Datasets
 
 Run the following script to download the Stats and IMDb datasets used to train SPNs
@@ -27,7 +29,7 @@ This may be useful to run first, just to test installed dependencies.
 
 ```bash
 python3 sketched_spn.py \
---method count-sketch
+--method count-sketch \
 --width 1e6 \
 --exact_sketch
 ```
