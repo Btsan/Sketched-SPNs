@@ -95,7 +95,7 @@ if __name__ == '__main__':
     import experiments
 
     test_table = 'posts'
-    csv = pd.read_csv(f'/ssd/btsan/stats_simplified/{test_table}.csv')
+    csv = pd.read_csv(f'./End-to-End-CardEst-Benchmark-master/datasets/stats_simplified/{test_table}.csv')
 
     _, _, tables = experiments.get_config('stats-ceb')
     types = tables[test_table]['col_types'] 
@@ -103,28 +103,6 @@ if __name__ == '__main__':
     projected_dim = 20
     max_discrete_dim = 32
     batch_size = 10000
-
-    # csv = pd.read_csv('/ssd/btsan/stats_simplified/posts.csv')
-    # # csv = csv.sample(n=min(len(csv), 10000))
-    # types = {'Id': 'DISCRETE',
-    #          'PostTypeId': 'DISCRETE',
-    #          'CreationDate': 'CONTINUOUS',
-    #          'Score': 'CONTINUOUS',
-    #          'ViewCount': 'CONTINUOUS',
-    #          'OwnerUserId': 'DISCRETE',
-    #          'AnswerCount': 'CONTINUOUS',
-    #          'CommentCount': 'CONTINUOUS',
-    #          'FavoriteCount': 'CONTINUOUS',
-    #          'LastEditorUserId': 'DISCRETE'}
-    
-    # csv = pd.read_csv('/ssd/btsan/stats_simplified/users.csv')
-    # # csv = csv.sample(n=min(len(csv), 10000))
-    # types = {'Id': 'DISCRETE',
-    #         'Reputation': 'CONTINUOUS',
-    #         'CreationDate': 'CONTINUOUS',
-    #         'Views': 'CONTINUOUS',
-    #         'UpVotes': 'CONTINUOUS',
-    #         'DownVotes': 'CONTINUOUS',}
     
     t0 = perf_counter()
     rdc_matrix_0, rdc_features = rdc(csv, types, projected_dim=projected_dim)

@@ -7,6 +7,6 @@ rm End-to-End-CardEst-Benchmark.zip
 
 # download IMDb for JOB-light (old link broke http://homepages.cwi.nl/~boncz/job/imdb.tgz)
 curl -L -o imdb.tgz http://event.cwi.nl/da/job/imdb.tgz 
-mkdir imdb
-tar zxvf imdb.tgz -C imdb
+mkdir End-to-End-CardEst-Benchmark-master/datasets/imdb/
+tar zxvf imdb.tgz -C End-to-End-CardEst-Benchmark-master/datasets/imdb/
 rm imdb.tgz
