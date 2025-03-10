@@ -105,7 +105,11 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
         print(f'{name} components', components)
 
         t0 = perf_counter_ns()
-        output = models[name](predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
+        if isinstance(models[name], SPN):
+            # use iterative inference method of SPN
+            output = models[name].iterative(predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
+        else:
+            output = models[name](predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
         if len(output) == 2:
             # exact sketches don't have a separate copy time
             estimator, sketch_time = output
