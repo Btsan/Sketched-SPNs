@@ -43,7 +43,7 @@ python3 sketched_spn.py \
 ```
 
 If time and memory are concerns, a larger minimum cluster size threshold can be specified with `--min_cluster` to decrease model size, at the expense of accuracy.
-Toggling the flag `--exact_preds` can also improve inference time, since the sketch selectivity estimator in leaf nodes is simply implemented on top of computing the exact selectivity.
+Toggling the flag `--exact_preds` can also improve inference time, since the sketch selectivity estimator in leaf nodes is simply implemented on top of computing exact selections.
 
 For example, the fastest model can be trained by specifying the total number of tuples in a relation to be the minimum cluster size via `--min_cluster 1` (100%), which creates the worst-case complete independence assumption model.
 
