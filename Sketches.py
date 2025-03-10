@@ -309,8 +309,10 @@ class CountSketch(object):
                 sketch_time = (t1 - t0)
                 if cuda:
                     return estimator.cuda(), sketch_time
+                # record memory usage of pushdown sketches
+                # assumes sketch of selection is only ever computed once
                 pushdown_id = sketch_id.union(preds)
-                self.pushdown[pushdown_id] += estimator.memory_usage()
+                self.pushdown[pushdown_id] = estimator.memory_usage()
                 return estimator, sketch_time
             else:
                 # return probability if not a join key attribute
@@ -542,8 +544,10 @@ class BoundSketch(object):
         if not col_in_preds:
             self.saved[sketch_id] = estimator
         else:
+            # record memory usage of pushdown sketches
+            # assumes sketch of selection is only ever computed once
             pushdown_id = sketch_id.union(preds)
-            self.pushdown[pushdown_id] += estimator.memory_usage()
+            self.pushdown[pushdown_id] = estimator.memory_usage()
         if cuda:
             return estimator.cuda(), sketch_time
         return deepcopy(estimator), sketch_time
