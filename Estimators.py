@@ -208,44 +208,45 @@ class CountEstimator(object):
 
 class DegreeEstimator(CountEstimator):
 
-    def __add__(self, other):
-        if isinstance(other, self.__class__):
-            new_sketch_lo = torch.maximum(self.sketch_lo, other.sketch_lo)
-            if not self.is_bifocal:
-                new_exact_hi = other.exact_hi
-                new_sketch_hi = other.sketch_hi
-            elif not other.is_bifocal:
-                new_exact_hi = self.exact_hi
-                new_sketch_hi = self.sketch_hi
-            else:
-                new_exact_hi = self.exact_hi.add(other.exact_hi, fill_value=0)
-                new_sketch_hi = torch.maximum(self.sketch_hi, other.sketch_hi)
-            return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
-        if isinstance(other, (int, float)):
-            assert other == 0
-            new_sketch_lo = self.sketch_lo + other
-            if not self.is_bifocal:
-                return type(self)(new_sketch_lo)
+    ### proposed element-wise maximum results in underestimation
+    # def __add__(self, other):
+    #     if isinstance(other, self.__class__):
+    #         new_sketch_lo = torch.maximum(self.sketch_lo, other.sketch_lo)
+    #         if not self.is_bifocal:
+    #             new_exact_hi = other.exact_hi
+    #             new_sketch_hi = other.sketch_hi
+    #         elif not other.is_bifocal:
+    #             new_exact_hi = self.exact_hi
+    #             new_sketch_hi = self.sketch_hi
+    #         else:
+    #             new_exact_hi = self.exact_hi.add(other.exact_hi, fill_value=0)
+    #             new_sketch_hi = torch.maximum(self.sketch_hi, other.sketch_hi)
+    #         return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
+    #     if isinstance(other, (int, float)):
+    #         assert other == 0
+    #         new_sketch_lo = self.sketch_lo + other
+    #         if not self.is_bifocal:
+    #             return type(self)(new_sketch_lo)
             
-            new_exact_hi = self.exact_hi + other
-            new_sketch_hi = self.sketch_hi + other
-            return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
-        return NotImplemented
+    #         new_exact_hi = self.exact_hi + other
+    #         new_sketch_hi = self.sketch_hi + other
+    #         return type(self)(new_sketch_lo, new_sketch_hi, new_exact_hi)
+    #     return NotImplemented
     
-    def __iadd__(self, other):
-        if isinstance(other, self.__class__):
-            self.sketch_lo = torch.maximum(self.sketch_lo, other.sketch_lo)
-            if not self.is_bifocal:
-                self.exact_hi = other.exact_hi
-                self.sketch_hi = other.sketch_hi
-            elif other.is_bifocal:
-                self.exact_hi = self.exact_hi.add(other.exact_hi, fill_value=0)
-                self.sketch_hi = torch.maximum(self.sketch_hi, other.sketch_hi)
-            return self
-        elif isinstance(other, (int, float)):
-            assert other == 0
-            return self
-        return NotImplemented
+    # def __iadd__(self, other):
+    #     if isinstance(other, self.__class__):
+    #         self.sketch_lo = torch.maximum(self.sketch_lo, other.sketch_lo)
+    #         if not self.is_bifocal:
+    #             self.exact_hi = other.exact_hi
+    #             self.sketch_hi = other.sketch_hi
+    #         elif other.is_bifocal:
+    #             self.exact_hi = self.exact_hi.add(other.exact_hi, fill_value=0)
+    #             self.sketch_hi = torch.maximum(self.sketch_hi, other.sketch_hi)
+    #         return self
+    #     elif isinstance(other, (int, float)):
+    #         assert other == 0
+    #         return self
+    #     return NotImplemented
     
     def __mul__(self, other):
         if isinstance(other, self.__class__):

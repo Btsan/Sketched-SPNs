@@ -228,11 +228,13 @@ class SPN(object):
     def iterative(self, predicates, key, **kwargs):
         results = dict()
 
+        # depth-first traversal
         stack = [self.node]
         visited = []
         
         # extract time for copying sketches from leaf nodes e.g., cpu to cuda
         copy_time = 0
+
         while stack:
             node = stack.pop()
 
@@ -278,9 +280,11 @@ class SPN(object):
             else:
                 # leaf node
                 t0 = perf_counter_ns()
-                results[node] = node.sketch(predicates, key, **kwargs)
+                sketch_or_prob, sketch_time = results[node] = node.sketch(predicates, key, **kwargs)
                 t1 = perf_counter_ns()
-                copy_time += t1 - t0 - results[node][1]
+                if not isinstance(sketch_or_prob, (int, float)):
+                    # only add copy overhead from sketch copying
+                    copy_time += t1 - t0 - sketch_time
             
             # print()
         return *results[self.node], copy_time
@@ -302,20 +306,20 @@ class UnivariateLeaf(object):
 
         if method == 'ams':
             self.sketch = AMS(data,
-                            width=bin_hashes[0].num_bins,
-                            depth=bin_hashes[0].fn.seeds.shape[0],
+                            width=bin_hashes[0].width,
+                            depth=bin_hashes[0].depth,
                             sign_hashes=sign_hashes,
                             bifocal=bifocal)
         elif method in ('bound-sketch', 'count-min'):
             self.sketch = BoundSketch(data,
-                                      depth=bin_hashes[0].fn.seeds.shape[0],
-                                      width=bin_hashes[0].num_bins,
+                                      depth=bin_hashes[0].depth,
+                                      width=bin_hashes[0].width,
                                       bin_hashes=bin_hashes,
                                       bifocal=bifocal)
         else:
             self.sketch = CountSketch(data,
-                                      depth=bin_hashes[0].fn.seeds.shape[0],
-                                      width=bin_hashes[0].num_bins,
+                                      depth=bin_hashes[0].depth,
+                                      width=bin_hashes[0].width,
                                       sign_hashes=sign_hashes,
                                       bin_hashes=bin_hashes,
                                       bifocal=bifocal)
@@ -341,20 +345,20 @@ class JoinLeaf(object):
 
         if method == 'ams':
             self.sketch = AMS(data,
-                            width=bin_hashes[0].num_bins,
-                            depth=bin_hashes[0].fn.seeds.shape[0],
+                            width=bin_hashes[0].width,
+                            depth=bin_hashes[0].depth,
                             sign_hashes=sign_hashes,
                             bifocal=bifocal)
         elif method in ('bound-sketch', 'count-min'):
             self.sketch = BoundSketch(data,
-                                      width=bin_hashes[0].num_bins,
-                                      depth=bin_hashes[0].fn.seeds.shape[0],
+                                      width=bin_hashes[0].width,
+                                      depth=bin_hashes[0].depth,
                                       bin_hashes=bin_hashes,
                                       bifocal=bifocal)
         else:
             self.sketch = CountSketch(data,
-                                      depth=bin_hashes[0].fn.seeds.shape[0],
-                                      width=bin_hashes[0].num_bins,
+                                      depth=bin_hashes[0].depth,
+                                      width=bin_hashes[0].width,
                                       sign_hashes=sign_hashes,
                                       bin_hashes=bin_hashes,
                                       bifocal=bifocal)

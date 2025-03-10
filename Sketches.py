@@ -233,8 +233,6 @@ class CountSketch(object):
         nbytes = sum(self.pushdown.values())
         for estimator in self.saved.values():
             nbytes += estimator.memory_usage()
-        for cm in self.countmins.values():
-            nbytes += cm.numel() * cm.element_size()
         return nbytes
     
     def __call__(self, predicates:dict, keys:dict, components:dict, cuda : bool = False, exact_prob : bool = False, **kwargs):
@@ -434,8 +432,6 @@ class BoundSketch(object):
         nbytes = sum(self.pushdown.values())
         for estimator in self.saved.values():
             nbytes += estimator.memory_usage()
-        for cm in self.countmins.values():
-            nbytes += cm.numel() * cm.element_size()
         return nbytes
     
     def __call__(self, predicates:dict, keys:dict, components:dict, count: bool = True, cuda: bool = False, exact_prob=False, **kwargs):

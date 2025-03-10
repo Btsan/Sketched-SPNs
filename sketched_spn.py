@@ -14,55 +14,56 @@ from SPN import SPN
 from RDC import rdc_transform
 from Sketches import AMS, CountSketch, BoundSketch
 
-## KWiseHash package by Heddes et al. (SIGMOD 2024)
-## https://github.com/mikeheddes/fast-multi-join-sketch - Jul 2024
-from kwisehash import KWiseHash
-class SignHash(object):
-    def __init__(self, depth, k=4) -> None:
-        self.fn = KWiseHash(depth, k=k)
+### KWiseHash package by Heddes et al. (SIGMOD 2024)
+### https://github.com/mikeheddes/fast-multi-join-sketch - Jul 2024
+# from kwisehash import KWiseHash
+# class SignHash(object):
+#     def __init__(self, depth, k=4) -> None:
+#         self.depth = depth
+#         self.fn = KWiseHash(depth, k=k)
 
-    def __call__(self, items: torch.Tensor) -> torch.Tensor:
-        return self.fn.sign(torch.as_tensor(items))
+#     def __call__(self, items: torch.Tensor) -> torch.Tensor:
+#         return self.fn.sign(torch.as_tensor(items))
     
-class BinHash(object):
-    def __init__(self, depth, width, k=2) -> None:
-        self.num_bins = width
-        self.fn = KWiseHash(depth, k=k)
+# class BinHash(object):
+#     def __init__(self, depth, width, k=2) -> None:
+#         self.depth = depth
+#         self.width = width
+#         self.fn = KWiseHash(depth, k=k)
 
-    def __call__(self, items: torch.Tensor) -> torch.Tensor:
-        return self.fn.bin(torch.as_tensor(items), self.num_bins)
+#     def __call__(self, items: torch.Tensor) -> torch.Tensor:
+#         # extra modulo to ensure no overflow
+#         return self.fn.bin(torch.as_tensor(items), self.width) % self.width
+
+### python implementation (approx 10x slower than KWiseHash)
+from hashes import BinHash, SignHash 
 
 def get_hashes(depth, width, k=4):
     binhashes = BinHash(depth, width, k=k)
     signhashes = SignHash(depth, k=k)
     return binhashes, signhashes
 
-def exact_sketch(data, bin_hashes=None, sign_hashes=None, bifocal=0, method='count-sketch', convolutional=False):
-    depth = bin_hashes[0].fn.seeds.shape[0]
-    width = bin_hashes[0].num_bins
+def exact_sketch(data, bin_hashes=None, sign_hashes=None, method='count-sketch'):
+    depth = bin_hashes[0].depth
+    width = bin_hashes[0].width
 
     if method == 'ams':
         sketch = AMS(data,
                      depth,
-                     sign_hashes=sign_hashes,
-                     bifocal=bifocal)
+                     sign_hashes=sign_hashes,)
     elif method in ('bound-sketch', 'count-min'):
         sketch = BoundSketch(data,
                              depth,
                              width,
                              sign_hashes=sign_hashes,
-                             bin_hashes=bin_hashes,
-                             bifocal=bifocal,
-                             convolutional=convolutional)
+                             bin_hashes=bin_hashes,)
     else:
         assert method == 'count-sketch'
         sketch = CountSketch(data,
                              depth,
                              width,
                              sign_hashes=sign_hashes,
-                             bin_hashes=bin_hashes,
-                             bifocal=bifocal,
-                             convolutional=convolutional)
+                             bin_hashes=bin_hashes,)
 
     return sketch
 
@@ -104,7 +105,13 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
         print(f'{name} components', components)
 
         t0 = perf_counter_ns()
-        estimator, sketch_time, copy_time = models[name].iterative(predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
+        output = models[name](predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
+        if len(output) == 2:
+            # exact sketches don't have a separate copy time
+            estimator, sketch_time = output
+            copy_time = 0
+        else:
+            estimator, sketch_time, copy_time = output
         t1 = perf_counter_ns()
         inference_times.append(t1 - t0 - sketch_time - copy_time)
         sketching_times.append(sketch_time)
@@ -164,7 +171,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='run sketched sum-product networks on a workload')
     parser.add_argument('--method', default='count-sketch', choices=['count-sketch', 'count-min', 'bound-sketch'], type=str.lower, help='depth of sketches')
     parser.add_argument('--depth', default=5, type=lambda x: int(float(x)), help='depth of sketches')
-    parser.add_argument('--width', default=1000000, type=lambda x: int(float(x)), help='width of sketches')
+    parser.add_argument('--width', default=100000, type=lambda x: int(float(x)), help='width of sketches')
     parser.add_argument('--workload', default=Path('./workloads/stats_CEB_sub_queries_corrected.sql'), type=Path, help='CSV containing the format (subqueries || parent ID || cardinality)')
     parser.add_argument('--data', default=Path('/ssd/btsan/stats_simplified/'), type=Path, help='path to directory containing table CSVs')
     parser.add_argument('--writefile', default=Path('out.csv'), type=Path, help='name of output csv file')
@@ -346,7 +353,7 @@ if __name__ == '__main__':
 
         print(f"\nTotal Sketching Time: {workload['sketching_time'].sum()} (average {workload['sketching_time'].mean()})")
         if not args.exact_sketch:
-            print(f"Total Model Training Time: {total_training} (average {total_training / len(models)})")
+            print(f"Total Structure Learning Time: {total_training} (average {total_training / len(models)})")
             print(f"Total Model Inference Time: {workload['inference_time'].sum()} (average {workload['inference_time'].mean()})")
             print(f"Total Model Copying Overhead: {workload['copy_overhead'].sum()} (average {workload['copy_overhead'].mean()})")
         print(f"Total Estimation Time: {workload['estimation_time'].sum()} (average {workload['copy_overhead'].mean()})")
