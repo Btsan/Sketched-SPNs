@@ -2,7 +2,7 @@
 
 ## Dependencies
 
-Install python dependencies (listed in [requirements.txt](/requirements.txt))
+Install Python dependencies (listed in [requirements.txt](/requirements.txt))
 ```
 pip3 install -r requirements.txt
 ```
