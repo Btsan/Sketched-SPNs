@@ -2,13 +2,14 @@
 
 ## Dependencies
 
-Install python dependencies (listed in [requirements.txt](/requirements.txt))
-
+Install Python dependencies (listed in [requirements.txt](/requirements.txt))
 ```
 pip3 install -r requirements.txt
 ```
 
 Optionally, install the KWiseHash package from [https://github.com/mikeheddes/fast-multi-join-sketch](https://github.com/mikeheddes/fast-multi-join-sketch/tree/c66c1486679f6eea4f78d703550050a83153360b/kwisehash).
+
+KWiseHash greatly reduces sketching time, especially when evaluating exact sketches. Otherwise, our Python implementation is used.
 
 ## Datasets
 
@@ -26,15 +27,15 @@ We can forgo the model and use run exact sketches with `--exact_sketch` toggled 
 This may be useful to run first, just to test installed dependencies.
 
 ```bash
-python3 sketched_spn.py \
---method count-sketch
+python sketched_spn.py \
+--method count-sketch \
 --width 1e6 \
 --exact_sketch
 ```
 
 For training, it is recommended to specify a directory with `--pickle` to save RDC features in, especially for training multiple configurations. 
 ```bash
-python3 sketched_spn.py \
+python sketched_spn.py \
 --pickle ./features/ \
 --method count-sketch \
 --width 1e5 \
@@ -53,7 +54,7 @@ Alternatively, the upper-bounds estimator, Bound-Sketch, may be specified with `
 
 By default the program runs Stats-CEB. To specify another dataset, e.g., JOB-light, provide the `--workload`, `--data`, and `--experiment` arguments:
 ```bash
-python3 sketched_spn.py \
+python sketched_spn.py \
 --pickle ./features/ \
 --method count-sketch \
 --width 1e5 \
