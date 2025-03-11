@@ -59,12 +59,13 @@ python sketched_spn.py \
 --method count-sketch \
 --width 1e5 \
 --decompose 1e-2 \
---min_cluster 0.1 \
+--min_cluster 0.2 \
 --percentile 1 \
 --pessimistic \
 --workload ./workloads/job_light_sub_query_with_star_join.sql.txt \
 --data ./End-to-End-CardEst-Benchmark-master/datasets/imdb/ \
 --experiment job-light
 ```
+Note: JOB-light contains ~100x more data than Stats-CEB and requires a lot of memory (>10 GB) to featurize, which our implementation performs all at once prior to learning SPNs.
 
 New datasets require extending [experiments.py](/experiments.py) with their schemas, e.g., specifying join keys, column names and types.
