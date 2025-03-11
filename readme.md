@@ -23,7 +23,7 @@ bash datasets.sh
 
 Launch [sketched_spn.py](/sketched_spn.py) for both training and inference on a workload.
 
-We can forgo the model and use run exact sketches with `--exact_sketch` toggled on.
+We can forgo the model and use exact sketches with `--exact_sketch` toggled on.
 This may be useful to run first, just to test installed dependencies.
 
 ```bash
