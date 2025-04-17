@@ -141,13 +141,11 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
 
     # sum for total sequential inference time
     # max for longest parallel inference time of all models
-    max_inference = pd.Timedelta(sum(inference_times), unit='ns')
+    max_inference = pd.Timedelta(max(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
     total_copying = pd.Timedelta(sum(copy_times), unit='ns')
-    use_bifocal = estimator.is_bifocal
 
     t0 = perf_counter_ns()
-
     start_node = query.random_node()
 
     # lo-freq estimate
@@ -291,10 +289,13 @@ if __name__ == '__main__':
                                     keys=meta['keys'], 
                                     method=args.method, 
                                     pessimistic=args.pessimistic, 
-                                    use_kmeans=args.kmeans,)
+                                    use_kmeans=args.kmeans,
+                                    exact_preds=args.exact_preds,)
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
             print(f"{'Hashed data' if args.exact_sketch else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MiB) on {table} ({delta})", flush=True)
             training_times.append(delta)
+
+            del rdc_features
         total_training = sum(training_times, pd.Timedelta(0))
 
         for i, row in enumerate(workload.iloc()):
@@ -307,7 +308,7 @@ if __name__ == '__main__':
 
             print(f"{i}: {query} ({row['cardinality']:,})")
             
-            est, inference_time, sketching_time, copying_time, estimation_time = estimate(query, models, cuda=args.cuda, method=args.method, percentile=args.percentile, exact_prob=args.exact_preds)
+            est, inference_time, sketching_time, copying_time, estimation_time = estimate(query, models, cuda=args.cuda, method=args.method, percentile=args.percentile)
             name = f"{args.method}_{args.depth}x{args.width}"
             workload.loc[i, name] = est
             workload.loc[i, name + '_err'] = max(est, 1) / max(row['cardinality'], 1) if est >= row['cardinality'] else max(row['cardinality'], 1) / max(est, 1)

@@ -110,7 +110,7 @@ class SPN(object):
     """Mixed Sum-Product Networks (Molina et al., 2017)
     https://arxiv.org/pdf/1710.03297.pdf
     """
-    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, num_clusters=2, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None, use_kmeans=False):
+    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, num_clusters=2, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None, use_kmeans=False, exact_preds=False):
         if keys is None:
             keys = set()
         self.size = len(data)
@@ -139,13 +139,13 @@ class SPN(object):
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'leaf node {data.name if isinstance(data, pd.Series) else data.columns}{data.shape}', end='')
             level += 1
             self.node = UnivariateLeaf(data,
-                                       bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal)
+                                       bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal, exact_preds=exact_preds)
             if verbose: print(f'({self.node.memory:,} bytes)')
         elif set(data.columns) == set(keys):
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'join node {tuple(data.columns)}{data.shape}', end='')
             level += 1
             self.node = JoinLeaf(data,
-                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal)
+                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal, exact_preds=exact_preds)
             if verbose: print(f'({self.node.memory:,} bytes)')
         elif cluster_next:
             self.columns = data.columns
@@ -153,7 +153,7 @@ class SPN(object):
             clusters, indices, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
             level += 1
             self.node = SumNode(clusters, indices,
-                                bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose)
+                                bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose, exact_preds=exact_preds)
         else:
             if data.shape[0] <= max(1, min_cluster):
                 # skip rdc calculation
@@ -172,13 +172,13 @@ class SPN(object):
                 level += 1
                 self.node = ProductNode(components, indices, 
                                         bin_hashes=bin_hashes, sign_hashes=sign_hashes, 
-                                        corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, use_kmeans=use_kmeans, verbose=verbose)
+                                        corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, use_kmeans=use_kmeans, verbose=verbose, exact_preds=exact_preds)
             else:
                 if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}(min. corr={min_corr:.2f})')
                 clusters, indices, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
                 level += 1
                 self.node = SumNode(clusters, indices,
-                                    bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose)
+                                    bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose, exact_preds=exact_preds)
 
 
         self.memory = self.node.memory
@@ -290,7 +290,7 @@ class SPN(object):
         return *results[self.node], copy_time
 
 class UnivariateLeaf(object):
-    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0, exact_preds=False):
         if type(data) is pd.DataFrame:
             data = data[data.columns[0]]
         # self.data = data
@@ -309,20 +309,23 @@ class UnivariateLeaf(object):
                             width=bin_hashes[0].width,
                             depth=bin_hashes[0].depth,
                             sign_hashes=sign_hashes,
-                            bifocal=bifocal)
+                            bifocal=bifocal,
+                            exact_preds=exact_preds)
         elif method in ('bound-sketch', 'count-min'):
             self.sketch = BoundSketch(data,
                                       depth=bin_hashes[0].depth,
                                       width=bin_hashes[0].width,
                                       bin_hashes=bin_hashes,
-                                      bifocal=bifocal)
+                                      bifocal=bifocal,
+                                      exact_preds=exact_preds)
         else:
             self.sketch = CountSketch(data,
                                       depth=bin_hashes[0].depth,
                                       width=bin_hashes[0].width,
                                       sign_hashes=sign_hashes,
                                       bin_hashes=bin_hashes,
-                                      bifocal=bifocal)
+                                      bifocal=bifocal,
+                                      exact_preds=exact_preds)
         
         self.memory = self.sketch.memory_usage()
         return
@@ -339,7 +342,7 @@ class UnivariateLeaf(object):
         return estimator, sketch_time, copy_time
 
 class JoinLeaf(object):
-    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0, exact_preds=False):
         self.columns = set(data.columns)
         self.size = len(data)
 
@@ -348,20 +351,23 @@ class JoinLeaf(object):
                             width=bin_hashes[0].width,
                             depth=bin_hashes[0].depth,
                             sign_hashes=sign_hashes,
-                            bifocal=bifocal)
+                            bifocal=bifocal,
+                            exact_preds=exact_preds)
         elif method in ('bound-sketch', 'count-min'):
             self.sketch = BoundSketch(data,
                                       width=bin_hashes[0].width,
                                       depth=bin_hashes[0].depth,
                                       bin_hashes=bin_hashes,
-                                      bifocal=bifocal)
+                                      bifocal=bifocal,
+                                      exact_preds=exact_preds)
         else:
             self.sketch = CountSketch(data,
                                       depth=bin_hashes[0].depth,
                                       width=bin_hashes[0].width,
                                       sign_hashes=sign_hashes,
                                       bin_hashes=bin_hashes,
-                                      bifocal=bifocal)
+                                      bifocal=bifocal,
+                                      exact_preds=exact_preds)
 
         self.memory = self.sketch.memory_usage()
         return

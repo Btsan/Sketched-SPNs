@@ -153,7 +153,7 @@ class AMS(object):
         return deepcopy(estimator), sketch_time
 
 class CountSketch(object):
-    def __init__(self, data:pd.DataFrame, depth:int, width:int, sign_hashes:list, bin_hashes:list, bifocal: int = 10, **kwargs):
+    def __init__(self, data:pd.DataFrame, depth:int, width:int, sign_hashes:list, bin_hashes:list, bifocal: int = 10, exact_preds=False, **kwargs):
         self.sketch_method = 'count-sketch'
         self.depth = depth
         self.width = width
@@ -211,23 +211,25 @@ class CountSketch(object):
         # memory usage of pushdown (exact) sketches
         self.pushdown = dict()
 
+
         # Count-Min for predicate selectivity # just one hash suffices
         self.countmins = {}
-        for col in self.columns:
-            values = distincts[col].map(hash).values + 1 # N
-            mask = distincts[col].notnull().values[None, :] # 1, N
-            # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
-            bins = bin_hashes[0](values) % self.width
-            counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
-            counts *= mask # don't count nulls
-            # assert bins.shape == counts.shape == (self.depth * len(bin_hashes), len(distincts)), \
-            #     f"{bins.shape} == {counts.shape} == {self.depth * len(bin_hashes), len(distincts)}"
-            assert bins.shape == counts.shape == (self.depth, len(distincts)), \
-                f"{bins.shape} == {counts.shape} == {self.depth, len(distincts)}"
-            # print(f"\n{col} {distincts['_count']}  counts {counts}")
-            # print(f"\nvalues {values} bins {bins}")
-            # self.countmins[col] = torch.zeros((self.depth * len(bin_hashes), self.width), dtype=torch.long).scatter_add_(1, bins, counts)
-            self.countmins[col] = torch.zeros((self.depth, self.width), dtype=torch.long).scatter_add_(1, bins, counts)
+        if exact_preds:
+            for col in self.columns:
+                values = distincts[col].map(hash).values + 1 # N
+                mask = distincts[col].notnull().values[None, :] # 1, N
+                # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
+                bins = bin_hashes[0](values) % self.width
+                counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
+                counts *= mask # don't count nulls
+                # assert bins.shape == counts.shape == (self.depth * len(bin_hashes), len(distincts)), \
+                #     f"{bins.shape} == {counts.shape} == {self.depth * len(bin_hashes), len(distincts)}"
+                assert bins.shape == counts.shape == (self.depth, len(distincts)), \
+                    f"{bins.shape} == {counts.shape} == {self.depth, len(distincts)}"
+                # print(f"\n{col} {distincts['_count']}  counts {counts}")
+                # print(f"\nvalues {values} bins {bins}")
+                # self.countmins[col] = torch.zeros((self.depth * len(bin_hashes), self.width), dtype=torch.long).scatter_add_(1, bins, counts)
+                self.countmins[col] = torch.zeros((self.depth, self.width), dtype=torch.long).scatter_add_(1, bins, counts)
 
     def memory_usage(self):
         nbytes = sum(self.pushdown.values())
@@ -235,7 +237,7 @@ class CountSketch(object):
             nbytes += estimator.memory_usage()
         return nbytes
     
-    def __call__(self, predicates:dict, keys:dict, components:dict, cuda : bool = False, exact_prob : bool = False, **kwargs):
+    def __call__(self, predicates:dict, keys:dict, components:dict, cuda : bool = False, **kwargs):
         """
         returns:
             the selectivity of the predicates (float) or the sketch of the keys (Estimator)
@@ -316,7 +318,7 @@ class CountSketch(object):
                 return estimator, sketch_time
             else:
                 # return probability if not a join key attribute
-                if exact_prob:
+                if not self.countmins:
                     prob = (sel_lo['_count'].sum() + sel_hi['_count'].sum()) / self.nrows
                 else:
                     # convert to count-min probability
@@ -391,7 +393,7 @@ class CountSketch(object):
         return deepcopy(estimator), sketch_time
     
 class BoundSketch(object):
-    def __init__(self, data:pd.DataFrame, depth:int, width:int, bin_hashes:list, bifocal: int = 10, **kwargs):
+    def __init__(self, data:pd.DataFrame, depth:int, width:int, bin_hashes:list, bifocal: int = 10, exact_preds=False, **kwargs):
         self.sketch_method = 'bound-sketch'
         self.depth = depth
         self.width = width
@@ -416,19 +418,20 @@ class BoundSketch(object):
         # Count-Min for predicate selectivity
         # Count-Min for predicate selectivity # just one hash suffices
         self.countmins = {}
-        for col in self.columns:
-            values = distincts[col].map(hash).values + 1 # N
-            mask = distincts[col].notnull().values[None, :] # 1, N
-            # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
-            bins = bin_hashes[0](values) % self.width
-            counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
-            counts *= mask # don't count nulls
-            # assert bins.shape == counts.shape == (self.depth * len(bin_hashes), len(distincts)), \
-            #     f"{bins.shape} == {counts.shape} == {self.depth * len(bin_hashes), len(distincts)}"
-            assert bins.shape == counts.shape == (self.depth, len(distincts)), \
-                f"{bins.shape} == {counts.shape} == {self.depth, len(distincts)}"
-            # self.countmins[col] = torch.zeros((self.depth * len(bin_hashes), self.width), dtype=torch.long).scatter_add_(1, bins, counts)
-            self.countmins[col] = torch.zeros((self.depth, self.width), dtype=torch.long).scatter_add_(1, bins, counts)
+        if exact_preds:
+            for col in self.columns:
+                values = distincts[col].map(hash).values + 1 # N
+                mask = distincts[col].notnull().values[None, :] # 1, N
+                # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
+                bins = bin_hashes[0](values) % self.width
+                counts = torch.tensor(distincts['_count'].values)[None, :].expand_as(bins)
+                counts *= mask # don't count nulls
+                # assert bins.shape == counts.shape == (self.depth * len(bin_hashes), len(distincts)), \
+                #     f"{bins.shape} == {counts.shape} == {self.depth * len(bin_hashes), len(distincts)}"
+                assert bins.shape == counts.shape == (self.depth, len(distincts)), \
+                    f"{bins.shape} == {counts.shape} == {self.depth, len(distincts)}"
+                # self.countmins[col] = torch.zeros((self.depth * len(bin_hashes), self.width), dtype=torch.long).scatter_add_(1, bins, counts)
+                self.countmins[col] = torch.zeros((self.depth, self.width), dtype=torch.long).scatter_add_(1, bins, counts)
             
     def memory_usage(self):
         nbytes = sum(self.pushdown.values())
@@ -436,7 +439,7 @@ class BoundSketch(object):
             nbytes += estimator.memory_usage()
         return nbytes
     
-    def __call__(self, predicates:dict, keys:dict, components:dict, count: bool = True, cuda: bool = False, exact_prob=False, **kwargs):
+    def __call__(self, predicates:dict, keys:dict, components:dict, count: bool = True, cuda: bool = False, **kwargs):
         """
         returns:
             the selectivity of the predicates (float) or the sketch of the keys (Estimator)
@@ -464,8 +467,8 @@ class BoundSketch(object):
             sel_hi = self.distincts_hi.query(q)
             # print(f"{q} --> {len(sel_lo)}/{len(self.distincts_lo)} {len(sel_hi)}/{len(self.distincts_hi)}")
             # return probability if not a join key attribute
-            if not col_in_keys:
-                if exact_prob:
+            if col_in_keys:
+                if not self.countmins:
                     prob = (sel_lo['_count'].sum() + sel_hi['_count'].sum()) / self.nrows
                 else:
                     # convert to count-min probability
