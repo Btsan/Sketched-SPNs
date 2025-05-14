@@ -2,8 +2,9 @@ from itertools import combinations
 
 import numpy as np      
 import pandas as pd
+# from sklearn.cross_decomposition import PLSCanonical as CCA
 from sklearn.cross_decomposition import CCA
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from scipy.stats import rankdata
 
@@ -13,7 +14,7 @@ def ecdf(X):
     return r
 
 # max_discrete_dim should increase with the number of distincts per column
-def empirical_copula(data, types, max_onehot_dim=2048, max_discrete_dim=64, batch_size=10000):
+def empirical_copula(data, types, max_onehot_dim=512, max_discrete_dim=32, batch_size=10000):
     assert type(data) == pd.DataFrame
     one_hot = OneHotEncoder(max_categories=max_onehot_dim)
     copula = dict()
@@ -41,12 +42,17 @@ def empirical_copula(data, types, max_onehot_dim=2048, max_discrete_dim=64, batc
 
 def rdc_transform(data, types, k=20, s=1/6):
     copula = empirical_copula(data, types)
-    projections = dict()
+    # projections = dict()
+    projections = []
     for col, features in copula.items():
         # random nonlinear projection
         gaussian = np.random.normal(size=(features.shape[-1], k)) * (s * features.shape[-1])
-        projections[col] = list(np.sin(np.matmul(features, gaussian)))
-    return pd.DataFrame(projections)
+        # projections[col] = list(np.sin(np.matmul(features, gaussian)))
+        projections.append(np.matmul(features, gaussian))
+    nonlinear_projections = np.sin(np.concatenate(projections, axis=1))
+    nonlinear_projections = StandardScaler().fit_transform(nonlinear_projections)
+    columns = pd.MultiIndex.from_product([copula.keys(), range(k)], names=['col', 'feat'])
+    return pd.DataFrame(nonlinear_projections, columns=columns)
 
 def rdc_cca(x ,y):
     cca = CCA(n_components=1)
@@ -54,7 +60,7 @@ def rdc_cca(x ,y):
     rdc = np.corrcoef(x_cca.T, y_cca.T,)[0, 1]
     return rdc
 
-def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1e-4, sample_size=-1):
+def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1e-3, sample_size=-1, meta_types=None):
     return_features = False
     if rdc_features is None:
         assert data is not None and types is not None
@@ -67,7 +73,27 @@ def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1
     else:
         if 0 < sample_size < len(rdc_features):
             rdc_features = rdc_features.sample(int(sample_size))
-    N, n_cols = rdc_features.shape
+    # N, n_cols = rdc_features.shape
+    N = len(rdc_features)
+
+    # rebuild MultiIndex to remove stale entries
+    # because pandas MultiIndex doesn't automatically remove removed columns
+    rdc_features.columns = pd.MultiIndex.from_tuples(rdc_features.columns.values, names=rdc_features.columns.names)
+    n_cols = len(rdc_features.columns.levels[0])
+    projected_dim = len(rdc_features.columns.levels[1])
+    cols = rdc_features.columns.levels[0].tolist()
+
+    # print(rdc_features.columns, cols)
+
+    omit = set()
+    if data is not None and meta_types is not None:
+        for i, col in enumerate(data.columns):
+            if meta_types[col] == 'DISCRETE' and data[col].nunique() >= len(data) * 0.99:
+                # if all values are unique, it is independent
+                omit.add(i)
+            elif data[col].nunique() == 1:
+                # if all values are the same, it is independent
+                omit.add(i)
     
     # initialize dependency matrix
     rdc_matrix = np.eye(n_cols, dtype=np.float64)
@@ -76,8 +102,12 @@ def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1
     if N > (projected_dim * 10):
         var_thresh = var_thresh / N
         for i, j in combinations(range(n_cols), 2):
-            x = np.stack(rdc_features[rdc_features.columns[i]])
-            y = np.stack(rdc_features[rdc_features.columns[j]])
+            if i in omit or j in omit:
+                continue
+            # x = np.stack(rdc_features[rdc_features.columns[i]])
+            # y = np.stack(rdc_features[rdc_features.columns[j]])
+            x = rdc_features[cols[i]].values
+            y = rdc_features[cols[j]].values
             # rdc_matrix[i, j] = rdc_matrix[j, i] = rdc_cca(x, y)
             var_x = np.var(x, axis=0).max()
             var_y = np.var(y, axis=0).max()

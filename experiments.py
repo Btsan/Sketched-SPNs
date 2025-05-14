@@ -1,11 +1,28 @@
 def get_config(experiment:str):
     primary = dict()
     dates = dict()
+    intervals = dict()
     tables = dict()
 
     # todo: discrete is intended as non-ordinal
     DISCRETE = 'DISCRETE'
     CONTINUOUS = 'CONTINUOUS'
+
+    # note: dates are treated as nanoseconds (1e-9 seconds)
+    TIMESTAMP_INTERVAL_PRESET = (10**9 * 60, # minutes
+                                 10**9 * 300, # 5 minutes
+                                 10**9 * 600, # 10 minutes
+                                 10**9 * 1800, # 30 minutes
+                                 10**9 * 3600, # hours
+                                 10**9 * 3600 * 2, # 2 hours
+                                 10**9 * 3600 * 4, # 4 hours
+                                 10**9 * 3600 * 12, # 12 hours
+                                 10**9 * 3600 * 24, # days
+                                 10**9 * 3600 * 24 * 7, # weeks
+                                 10**9 * 3600 * 24 * 14, # 2 weeks
+                                 10**9 * 3600 * 24 * 28, # months
+                                 10**9 * 3600 * 24 * 28 * 13, # years
+                                 )
 
     # note: if col_types order changes, old rdc features are invalidated
     if experiment == 'stats-ceb':
@@ -24,6 +41,30 @@ def get_config(experiment:str):
                  'posts': {'CreationDate',},
                  'users': {'CreationDate',},
                  'votes': {'CreationDate',},}
+        # ideally there are intevals for all continuous attributes
+        # intervals should be multiples of the next smallest interval
+        # this effectively bins the data into intervals of the given granularity
+        # has a huge impact on the performance of the SPN
+        # the more intervals (with finer granularity) the more accurate (and larger) the model
+        intervals = {'badges': {'Date': TIMESTAMP_INTERVAL_PRESET,},
+                    'comments': {'CreationDate': TIMESTAMP_INTERVAL_PRESET, 
+                                  'Score': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),},
+                    'postHistory': {'CreationDate': TIMESTAMP_INTERVAL_PRESET}, 
+                    'postLinks': {'CreationDate': TIMESTAMP_INTERVAL_PRESET},
+                    'posts': {'CreationDate': TIMESTAMP_INTERVAL_PRESET,
+                              'Score': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'ViewCount': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'AnswerCount': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'CommentCount': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'FavoriteCount': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),},
+                    'tags': {'Count': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),},
+                    'users': {'CreationDate': TIMESTAMP_INTERVAL_PRESET,
+                              'Reputation': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'Views': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'UpVotes': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+                              'DownVotes': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),},
+                    'votes': {'CreationDate': TIMESTAMP_INTERVAL_PRESET,
+                              'BountyAmount': (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),},}
         tables = {'badges': {'names': None,
                              'col_types': {'Id': DISCRETE,
                                          'UserId': DISCRETE,
@@ -86,6 +127,8 @@ def get_config(experiment:str):
     elif experiment == 'job-light':
         primary = {'title': {'id'}}
         dates = dict()
+        intervals = dict()
+        intervals = {'title': {'production_year': (1, 2, 4, 8 ,16, 32),}}
         tables = {'title': {'names': ['id', 'title', 'imdb_index', 'kind_id', 'production_year',
                                 'imdb_id', 'phonetic_code', 'episode_of_id', 'season_nr',
                                 'episode_nr', 'series_years', 'md5sum'],
@@ -129,4 +172,4 @@ def get_config(experiment:str):
     for _, meta in tables.items():
         assert meta['keys'].intersection(meta['col_types']), f"{meta['keys']} must intersect {meta['col_types']}"
         
-    return primary, dates, tables
+    return primary, dates, intervals, tables

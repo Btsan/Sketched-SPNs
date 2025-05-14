@@ -1,7 +1,7 @@
 
 import pandas as pd
 
-def get_dataframe(csv, names=None, columns=None):
+def get_dataframe(csv, names=None, columns=None, dates=None):
     if columns:
         columns = list(columns)
     if names:
@@ -20,7 +20,11 @@ def get_dataframe(csv, names=None, columns=None):
                         on_bad_lines='skip',
                         low_memory=False)
     if columns:
-        return df[columns]
+        df =  df[columns]
+    
+    if dates:
+        for col in dates:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     return df
 
 def get_workload(csv):

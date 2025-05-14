@@ -16,27 +16,29 @@ from Sketches import AMS, CountSketch, BoundSketch
 
 ### KWiseHash package by Heddes et al. (SIGMOD 2024)
 ### https://github.com/mikeheddes/fast-multi-join-sketch - Jul 2024
-# from kwisehash import KWiseHash
-# class SignHash(object):
-#     def __init__(self, depth, k=4) -> None:
-#         self.depth = depth
-#         self.fn = KWiseHash(depth, k=k)
-
-#     def __call__(self, items: torch.Tensor) -> torch.Tensor:
-#         return self.fn.sign(torch.as_tensor(items))
+from kwisehash import KWiseHash
+class SignHash(object):
+    def __init__(self, depth, k=4) -> None:
+        self.depth = depth
+        self.fn = KWiseHash(depth, k=k)
+    def __call__(self, arr: torch.Tensor) -> torch.Tensor:
+        signs = self.fn.sign(torch.as_tensor(arr.flatten()))
+        signs = signs.reshape(self.depth, *arr.shape)
+        return signs
     
-# class BinHash(object):
-#     def __init__(self, depth, width, k=2) -> None:
-#         self.depth = depth
-#         self.width = width
-#         self.fn = KWiseHash(depth, k=k)
+class BinHash(object):
+    def __init__(self, depth, width, k=2) -> None:
+        self.depth = depth
+        self.width = width
+        self.fn = KWiseHash(depth, k=k)
+    def __call__(self, arr: torch.Tensor) -> torch.Tensor:
+        # extra modulo to ensure no overflow
+        bins = self.fn.bin(torch.as_tensor(arr.flatten()), self.width) % self.width
+        bins = bins.reshape(self.depth, *arr.shape)
+        return bins
 
-#     def __call__(self, items: torch.Tensor) -> torch.Tensor:
-#         # extra modulo to ensure no overflow
-#         return self.fn.bin(torch.as_tensor(items), self.width) % self.width
-
-### python implementation (approx 10x slower than KWiseHash)
-from hashes import BinHash, SignHash 
+### python implementation (at least 2x slower than KWiseHash)
+# from hashes import BinHash, SignHash 
 
 def get_hashes(depth, width, k=4):
     binhashes = BinHash(depth, width, k=k)
@@ -50,20 +52,23 @@ def exact_sketch(data, bin_hashes=None, sign_hashes=None, method='count-sketch')
     if method == 'ams':
         sketch = AMS(data,
                      depth,
-                     sign_hashes=sign_hashes,)
+                     sign_hashes=sign_hashes,
+                     exact_preds=True,)
     elif method in ('bound-sketch', 'count-min'):
         sketch = BoundSketch(data,
                              depth,
                              width,
                              sign_hashes=sign_hashes,
-                             bin_hashes=bin_hashes,)
+                             bin_hashes=bin_hashes,
+                             exact_preds=True,)
     else:
         assert method == 'count-sketch'
         sketch = CountSketch(data,
                              depth,
                              width,
                              sign_hashes=sign_hashes,
-                             bin_hashes=bin_hashes,)
+                             bin_hashes=bin_hashes,
+                             exact_preds=True,)
 
     return sketch
 
@@ -88,12 +93,122 @@ def cross_correlate(node, query, id2sketch, visited=None):
         sketch = sketch * cross_correlate(joined_node, query, id2sketch, visited=visited)
     return sketch
 
-def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, exact_prob=False):
+def bound_estimate(query, models, exact, cuda=False, exact_prob=False, exact_degree=False):
     inference_times = []
     sketching_times = []
     copy_times = []
 
-    sketches_lo = dict()
+    sketch_list = []
+    tables = tuple(query.table_mapping_iter())
+    for id_count, name_count in tables:
+        sketches = dict()
+
+        predicates = dict() if id_count not in query.selects else query.selects[id_count]
+        keys = query.id2joined_attrs[id_count]
+        components = dict()
+        for attr in keys:
+            node = f"{id_count}.{attr}"
+            components[attr] = query.node2component[node]
+        print(f'{name_count} components', components)
+
+        t0 = perf_counter_ns()
+        if isinstance(models[name_count], SPN):
+            # use iterative inference method of SPN
+            output = models[name_count].iterative(predicates, keys, components=components, count=True, exact_prob=exact_prob, cuda=cuda)
+        else:
+            output = models[name_count](predicates, keys, components=components, count=True, exact_prob=exact_prob, cuda=cuda)
+        if len(output) == 2:
+            # exact sketches don't have a separate copy time
+            sketch, sketch_time = output
+            copy_time = 0
+        else:
+            sketch, sketch_time, copy_time = output
+        t1 = perf_counter_ns()
+        inference_times.append(t1 - t0 - sketch_time - copy_time)
+        sketching_times.append(sketch_time)
+        copy_times.append(copy_time)
+
+        # double check before anythng else
+        if isinstance(sketch, (int, float)):
+            assert sketch == 0, sketch
+            print(f"Sketch of {id_count}({keys.values()}) having {predicates} is 0")
+            return (0,
+                    pd.Timedelta(sum(inference_times), unit='ns'),
+                    pd.Timedelta(sum(sketching_times), unit='ns'),
+                    pd.Timedelta(sum(copy_times), unit='ns'),
+                    pd.Timedelta(0))
+        
+        # print(sketch)
+        sketches[id_count] = sketch if not cuda else sketch.cuda()
+
+        for id_degree, name_degree in tables:
+            if id_count == id_degree:
+                continue
+            if id_degree in query.selects and exact_degree:
+                predicates = query.selects[id_degree]
+            else:
+                predicates = dict()
+            keys = query.id2joined_attrs[id_degree]
+            components = dict()
+            for attr in keys:
+                node = f"{id_degree}.{attr}"
+                components[attr] = query.node2component[node]
+            print(f'{name_degree} components', components)
+
+            output = exact[name_degree](predicates, keys, components=components, count=False, exact_prob=exact_prob, cuda=cuda)
+            if len(output) == 2:
+                # exact sketches don't have a separate copy time
+                sketch, sketch_time = output
+                copy_time = 0
+            else:
+                sketch, sketch_time, copy_time = output
+
+            # double check before anythng else
+            if isinstance(sketch, (int, float)):
+                assert sketch == 0, sketch
+                print(f"Sketch of {id_degree}({keys.values()}) having {predicates} is 0")
+                return (0,
+                        pd.Timedelta(sum(inference_times), unit='ns'),
+                        pd.Timedelta(sum(sketching_times), unit='ns'),
+                        pd.Timedelta(sum(copy_times), unit='ns'),
+                        pd.Timedelta(0))
+            
+            # print(sketch)
+            sketches[id_degree] = sketch if not cuda else sketch.cuda()
+
+        sketch_list.append(sketches)
+
+    # sum for total sequential inference time
+    # max for longest parallel inference time of all models
+    max_inference = pd.Timedelta(max(inference_times), unit='ns')
+    total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
+    total_copying = pd.Timedelta(sum(copy_times), unit='ns')
+
+    estimates = []
+
+    t0 = perf_counter_ns()
+
+    for sketches in sketch_list:
+        start_node = query.random_node()
+
+        sketch_estimates = cross_correlate(start_node, query, sketches).sum(dim=1)
+        print(f'sketch estimates {sketch_estimates.shape}:')
+        print(sketch_estimates)
+
+        estimates.append(sketch_estimates.min().item())
+
+    t1 = perf_counter_ns()
+    estimation_time = pd.Timedelta(t1-t0, unit='ns')
+    
+    return min(estimates), max_inference, total_sketching, total_copying, estimation_time
+
+
+def count_estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, exact_prob=False, mean=False):
+    inference_times = []
+    sketching_times = []
+    copy_times = []
+
+    sketches = dict()
     use_count = True
     for id, name in query.table_mapping_iter():
         predicates = dict() if id not in query.selects else query.selects[id]
@@ -112,18 +227,18 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
             output = models[name](predicates, keys, components=components, count=use_count, exact_prob=exact_prob, cuda=cuda)
         if len(output) == 2:
             # exact sketches don't have a separate copy time
-            estimator, sketch_time = output
+            sketch, sketch_time = output
             copy_time = 0
         else:
-            estimator, sketch_time, copy_time = output
+            sketch, sketch_time, copy_time = output
         t1 = perf_counter_ns()
         inference_times.append(t1 - t0 - sketch_time - copy_time)
         sketching_times.append(sketch_time)
         copy_times.append(copy_time)
 
         # double check before anythng else
-        if isinstance(estimator, (int, float)):
-            assert estimator == 0, estimator
+        if isinstance(sketch, (int, float)):
+            assert sketch == 0, sketch
             print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
@@ -132,12 +247,12 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
                     pd.Timedelta(0))
         
         if method == 'bound-sketch':
-            print(f"use_count={use_count} returns {type(estimator)}")
-            assert (estimator.sketch_lo >= 0).all(), f"negative values in {name} lo sketch"
+            print(f"use_count={use_count} returns {type(sketch)}")
+            assert (sketch.sketch_lo >= 0).all(), f"negative values in {name} lo sketch"
             use_count = False
         
-        # print(estimator)
-        sketches_lo[id] = estimator.sketch_lo if not cuda else estimator.sketch_lo.cuda()
+        # print(sketch)
+        sketches[id] = sketch if not cuda else sketch.cuda()
 
     # sum for total sequential inference time
     # max for longest parallel inference time of all models
@@ -148,13 +263,96 @@ def estimate(query, models, cuda=False, method='count-sketch', percentile=0.5, e
     t0 = perf_counter_ns()
     start_node = query.random_node()
 
-    # lo-freq estimate
-    sketch_estimates = cross_correlate(start_node, query, sketches_lo).sum(dim=1)
-    print(f'lo sketch estimates {sketch_estimates.shape}:')
+    sketch_estimates = cross_correlate(start_node, query, sketches).sum(dim=1)
+    print(f'sketch estimates {sketch_estimates.shape}:')
     print(sketch_estimates)
 
     if method in ('count-min', 'bound-sketch'):
         est = sketch_estimates.min().item()
+    elif mean:
+        est = sketch_estimates.mean().item()
+    else:
+        est = sketch_estimates.quantile(percentile).item() # negative estimates are allowed
+
+    t1 = perf_counter_ns()
+    estimation_time = pd.Timedelta(t1-t0, unit='ns')
+    
+    return est, max_inference, total_sketching, total_copying, estimation_time
+
+def same_sign_estimate(query, models, cuda=False, percentile=0.5, exact_prob=False, mean=False):
+    inference_times = []
+    sketching_times = []
+    copy_times = []
+
+    sketches = dict()
+    negatives = dict()
+    num_factors = 0
+    for id, name in query.table_mapping_iter():
+        predicates = dict() if id not in query.selects else query.selects[id]
+        keys = query.id2joined_attrs[id]
+        components = dict()
+        for attr in keys:
+            node = f"{id}.{attr}"
+            components[attr] = query.node2component[node]
+        print(f'{name} components', components)
+
+        num_factors += len(keys)
+
+        t0 = perf_counter_ns()
+        if isinstance(models[name], SPN):
+            # use iterative inference method of SPN
+            output = models[name].iterative(predicates, keys, components=components, exact_prob=exact_prob, cuda=cuda, separate_negatives=True)
+        else:
+            output = models[name](predicates, keys, components=components, exact_prob=exact_prob, cuda=cuda, separate_negatives=True)
+        if len(output) == 2:
+            # exact sketches don't have a separate copy time
+            sketch, sketch_time = output
+            copy_time = 0
+        else:
+            sketch, sketch_time, copy_time = output
+        t1 = perf_counter_ns()
+        inference_times.append(t1 - t0 - sketch_time - copy_time)
+        sketching_times.append(sketch_time)
+        copy_times.append(copy_time)
+
+        # double check before anythng else
+        if isinstance(sketch, (int, float)):
+            assert sketch == 0, sketch
+            print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
+            return (0,
+                    pd.Timedelta(sum(inference_times), unit='ns'),
+                    pd.Timedelta(sum(sketching_times), unit='ns'),
+                    pd.Timedelta(sum(copy_times), unit='ns'),
+                    pd.Timedelta(0))
+        
+        # print(sketch)
+        width = sketch.shape[-1]
+        sketches[id] = sketch[:, :width//2] if not cuda else sketch[:, :width//2].cuda()
+        negatives[id] = sketch[:, width//2:] if not cuda else sketch[:, width//2:].cuda()
+
+    # sum for total sequential inference time
+    # max for longest parallel inference time of all models
+    max_inference = pd.Timedelta(max(inference_times), unit='ns')
+    total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
+    total_copying = pd.Timedelta(sum(copy_times), unit='ns')
+
+    t0 = perf_counter_ns()
+    start_node = query.random_node()
+
+    sketch_products = cross_correlate(start_node, query, sketches)
+    # sketch_estimates = torch.where(negative_components < 0, sketch_products - 2 * negative_components, sketch_products).sum(dim=1)
+    if num_factors % 2 == 0:
+        sketch_estimates = sketch_products.sum(dim=1)
+    else:
+        negative_components = cross_correlate(start_node, query, negatives)
+        assert negative_components.max() <= 0, f"negative components {negative_components.max()}"
+        corrected_product = sketch_products - 2 * negative_components
+        sketch_estimates = corrected_product.sum(dim=1)
+    print(f'sketch estimates {sketch_estimates.shape}:')
+    print(sketch_estimates)
+
+    if mean:
+        est = sketch_estimates.mean().item()
     else:
         est = sketch_estimates.quantile(percentile).item() # negative estimates are allowed
 
@@ -171,7 +369,7 @@ if __name__ == '__main__':
     import experiments
     
     parser = argparse.ArgumentParser(description='run sketched sum-product networks on a workload')
-    parser.add_argument('--method', default='count-sketch', choices=['count-sketch', 'count-min', 'bound-sketch'], type=str.lower, help='depth of sketches')
+    parser.add_argument('--method', default='count-sketch', choices=['ams', 'count-sketch', 'count-min', 'bound-sketch'], type=str.lower, help='depth of sketches')
     parser.add_argument('--depth', default=5, type=lambda x: int(float(x)), help='depth of sketches')
     parser.add_argument('--width', default=100000, type=lambda x: int(float(x)), help='width of sketches')
     parser.add_argument('--workload', default=Path('./workloads/stats_CEB_sub_queries_corrected.sql'), type=Path, help='CSV containing the format (subqueries || parent ID || cardinality)')
@@ -192,7 +390,19 @@ if __name__ == '__main__':
     parser.add_argument('--percentile', default=0.5, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median (default) and 1 for max')
     parser.add_argument('--kmeans', action='store_true', help='use kmeans to learn sum nodes (fast, increases model size)')
     parser.add_argument('--exact_preds', action='store_true', help='use exact selectivity of predicates in leaf nodes, instead of sketch estimates')
+    parser.add_argument('--same_sign', action='store_true', help='use same-sign estimation for count-sketch')
+    parser.add_argument('--pearsons', action='store_true', help='use pearson correlation for structure learning instead of rdc')
+    parser.add_argument('--mean', action='store_true', help='use mean instead of percentile for estimator')
     args = parser.parse_args()
+
+    if args.same_sign:
+        args.method = 'count-sketch'
+
+    if args.method == 'ams':
+        args.width = 1
+    elif args.width == 1 and args.method == 'count-sketch':
+        args.method = 'ams'
+
     print(args)
 
     if args.find_keys:
@@ -213,7 +423,7 @@ if __name__ == '__main__':
             print(f'predicate columns of {t}: {c}')
         exit(0)
 
-    primary, dates, tables = experiments.get_config(args.experiment)
+    primary, dates, intervals, tables = experiments.get_config(args.experiment)
 
     num_components = len(tables) - 1 # this suffices for acyclic joins
     bin_hashes = [BinHash(args.depth, args.width) for _ in range(num_components)]
@@ -234,23 +444,32 @@ if __name__ == '__main__':
     print(f'Generating results into workload ({workload.shape})')
 
     with torch.inference_mode():
-        models = dict()
+        if args.exact_sketch:
+            models = exact = dict()
+        else:
+            models = dict()
+            exact = dict()
 
         training_times = []
         for table, meta in tables.items():
             ts = perf_counter_ns()
-            dataset = get_dataframe(f'{args.data}/{table}.csv', names=meta['names'], columns=meta['col_types'].keys())
-            if table in dates:
-                for col in dates[table]:
-                    dataset[col] = pd.to_datetime(dataset[col])
+            dataset = get_dataframe(f'{args.data}/{table}.csv',
+                                    names=meta['names'],
+                                    columns=meta['col_types'].keys(),
+                                    dates=dates[table] if table in dates else None)
+            # if table in dates:
+            #     for col in dates[table]:
+            #         dataset[col] = pd.to_datetime(dataset[col])
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
             print(f"Loaded {table} ({dataset.memory_usage(deep=True).sum():,} bytes) {delta.total_seconds():>25,.2f}s ({delta})")
             print(dataset.describe().to_string(float_format="{:,.2f}".format))
             print(dataset.memory_usage(deep=True).to_string(float_format="{:,.2f}".format))
 
-            if args.exact_sketch:
-                models[table] = exact_sketch(dataset, bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=args.method)
-            else:
+            if args.exact_sketch or args.method == 'bound-sketch':
+                # bound sketch approximation still uses exact degrees without pushdown
+                exact[table] = exact_sketch(dataset, bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=args.method)
+            
+            if not args.exact_sketch:
                 ts = perf_counter_ns()
                 # extract features before training
                 if args.pickle:
@@ -290,12 +509,16 @@ if __name__ == '__main__':
                                     method=args.method, 
                                     pessimistic=args.pessimistic, 
                                     use_kmeans=args.kmeans,
-                                    exact_preds=args.exact_preds,)
+                                    exact_preds=args.exact_preds,
+                                    meta_types=meta['col_types'],
+                                    pearsons=args.pearsons,
+                                    intervals=intervals[table] if table in intervals else None,)
+                del rdc_features
+                
             delta = pd.Timedelta(perf_counter_ns() - ts, unit='ns')
             print(f"{'Hashed data' if args.exact_sketch else 'Trained SPN'} ({models[table].memory / 2**20:,.2f} MiB) on {table} ({delta})", flush=True)
             training_times.append(delta)
 
-            del rdc_features
         total_training = sum(training_times, pd.Timedelta(0))
 
         for i, row in enumerate(workload.iloc()):
@@ -308,7 +531,12 @@ if __name__ == '__main__':
 
             print(f"{i}: {query} ({row['cardinality']:,})")
             
-            est, inference_time, sketching_time, copying_time, estimation_time = estimate(query, models, cuda=args.cuda, method=args.method, percentile=args.percentile)
+            if args.method == 'bound-sketch':
+                est, inference_time, sketching_time, copying_time, estimation_time = bound_estimate(query, models, exact, cuda=args.cuda, exact_degree=args.exact_sketch)
+            elif args.same_sign:
+                est, inference_time, sketching_time, copying_time, estimation_time = same_sign_estimate(query, models, cuda=args.cuda, percentile=args.percentile, mean=args.mean,)
+            else:
+                est, inference_time, sketching_time, copying_time, estimation_time = count_estimate(query, models, cuda=args.cuda, method=args.method, percentile=args.percentile, mean=args.mean,)
             name = f"{args.method}_{args.depth}x{args.width}"
             workload.loc[i, name] = est
             workload.loc[i, name + '_err'] = max(est, 1) / max(row['cardinality'], 1) if est >= row['cardinality'] else max(row['cardinality'], 1) / max(est, 1)

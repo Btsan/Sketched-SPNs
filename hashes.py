@@ -17,10 +17,19 @@ def _poly_call(input:int64, seeds:int64, k:int) -> int64:
     output = seeds[:, 0]
     for i in range(1, k):
         tmp0 = output * input + seeds[:, i]
+
+        ### either modulo
         # output = tmp0 % MERSENNE_PRIME
+
+        ### or bitwise AND with range check
         tmp1 = (tmp0 & MERSENNE_PRIME) + (tmp0 >> 61)
-        tmp2 = tmp1 - MERSENNE_PRIME
-        output = np.where(tmp2 < 0, tmp1, tmp2)
+        # tmp2 = tmp1 - MERSENNE_PRIME
+        # output = np.where(tmp2 < 0, tmp1, tmp2)
+        tmp1[tmp1 >= MERSENNE_PRIME] -= MERSENNE_PRIME
+        output = tmp1
+
+        ### everything in one line
+        # output = (output * input + seeds[:, i]) % MERSENNE_PRIME
     return output
 
 class SignHash(object):
@@ -61,9 +70,9 @@ if __name__ == '__main__':
     iterations = 10
     depth = 5
     width = 10000
-    K = 4
+    K = 64
     xi = SignHash(depth, k=K)
-    b_xi = BinHash(depth, nbins=width, k=K)
+    b_xi = BinHash(depth, width, k=K)
 
     t0 = perf_counter()
     signs = sum([xi(input) for _ in range(iterations)])
