@@ -1,3 +1,4 @@
+from copy import deepcopy
 from time import perf_counter_ns
 
 import numpy as np
@@ -109,6 +110,7 @@ def decompose(data, features, pairwise_corr, corr_thresh=0.3, min_cluster=1e5, t
 
 def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=False):
     assert k >= 2, f"Invalid number of clusters: {k}"
+    assert len(data) > 1, f"Not enough points ({len(data)}) to cluster"
     # t0 = perf_counter_ns()
     # feat = np.concatenate([np.stack(features[col]) for col in features], axis=-1)
     # feat = np.column_stack([np.array(features[col].to_list()) for col in features])
@@ -120,7 +122,7 @@ def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=Fal
     if use_kmeans:
         # kmeans = KMeans(n_clusters=k).fit(sample)
         # labels = kmeans.predict(scaled)[:, None]
-        labels = KMeans(n_clusters=k).fit_predict(feat)[:, None]
+        labels = KMeans(n_clusters=k).fit_predict(feat)
     else:
         if len(features) > max_sample_size:
             # t2 = perf_counter_ns()
@@ -137,7 +139,23 @@ def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=Fal
             assert isinstance(gmm, GaussianMixture), f"Invalid GMM type: {type(gmm)}"
             gmm = gmm.fit(sample)
             # gmm.fit(scaled)
-        labels = gmm.predict(feat)[:, None]
+        labels = gmm.predict(feat)
+        # print(f"gmm labels {np.bincount(labels)}")
+
+    # in case, prevents failure to cluster
+    if (np.bincount(labels) > 0).sum() < 2:
+        # fallback to random projection LSH
+        rng = np.random.default_rng()
+        normals = rng.random((feat.shape[1], 1)) - 0.5
+        rand_proj = np.matmul(feat, normals)
+        labels = np.sin(rand_proj).flatten() > 0
+        # print(f"LSH labels {np.bincount(labels)}")
+
+    if (np.bincount(labels) > 0).sum() < 2:
+        # final fallback to even split
+        labels = np.arange(feat.shape[0]) % 2
+        # print(f"split labels {np.bincount(labels)}")
+
     # t1 = perf_counter_ns()
     # print(f"Clustering time: {(t1 - t0) / 1e6:.2f} ms")
 
@@ -163,41 +181,6 @@ def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=Fal
     # t1 = perf_counter_ns()
     # print(f"Cluster extraction time: {(t1 - t0) / 1e6:.2f} ms")
 
-    # in case, prevents failure to cluster
-    if len(clusters) == 1:
-        # fallback to random projection LSH
-        clusters = []
-        cluster_features = []
-
-        # hashes
-        rng = np.random.default_rng()
-        normals = np.random.rand(feat.shape[1], 1) - 0.5
-        rand_proj = np.matmul(feat, normals)
-        labels = np.sin(rand_proj).flatten() > 0
-
-        # group by LSH labels
-        for cluster, group in data.groupby(labels):
-            if not group.empty:
-                clusters.append(group)
-
-        for cluster, group in features.groupby(labels):
-            if not group.empty:
-                cluster_features.append(group)
-    
-    if len(clusters) == 1:
-        # final fallback to even split
-        clusters = []
-        cluster_features = []
-
-        labels = np.arange(feat.shape[0]) % 2
-        for cluster, group in data.groupby(labels):
-            if not group.empty:
-                clusters.append(group)
-
-        for cluster, group in features.groupby(labels):
-            if not group.empty:
-                cluster_features.append(group)
-
     assert len(clusters) > 1, \
         f'cluster labels {labels}'
     return clusters, cluster_features, gmm
@@ -206,92 +189,77 @@ class SPN(object):
     """Mixed Sum-Product Networks (Molina et al., 2017)
     https://arxiv.org/pdf/1710.03297.pdf
     """
-    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0.3, min_cluster=1e5, num_clusters=2, cluster_next=False, level=0, verbose=True, sparse=False, keys=None, method='count-sketch', bifocal=0, pessimistic=False, gmm=None, use_kmeans=False, exact_preds=False, meta_types=None, pearsons=False, intervals=None):
-        self.exact_preds = exact_preds
+    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0, min_cluster=1e5, num_clusters=2, cluster_next=False, level=0, verbose=True, keys=None, method='count-sketch', pessimistic=False, gmm=None, use_kmeans=False, meta_types=None, intervals=None, selectivity_estimator='count-min'):
+        self.exact_preds = (selectivity_estimator == 'exact')
         if keys is None:
             keys = set()
         self.size = len(data)
         self.sketch_method = method
-        # if features is None:
-        #     features = data.copy(deep=True)
-        #     # index.fillna(-42, inplace=True)
-        #     # index = index.map(hash)
-        #     features.iloc[:, :] = rdc(features, types)
-        # assert data.shape == features.shape, f'data {data.shape} mismatch with features {features.shape}'
 
         if isinstance(data, pd.Series):
             self.columns = {data.name,}
             self.dtypes = {data.name: data.dtype}
-            # self.bounds = {data.name: (data.min(), data.max())}
         else:
             self.columns = set(data.columns)
             self.dtypes = dict()
-            # self.bounds = dict()
             for col in self.columns:
                 self.dtypes[col] = data[col].dtype
-                # self.bounds[col] = (data[col].min(), data[col].max())
                 
         # if verbose: print(f'keys {keys}')
         if len(data.shape) == 1 or len(data.columns) == 1:
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'leaf node {data.name if isinstance(data, pd.Series) else data.columns}', end='')
             level += 1
             self.node = UnivariateLeaf(data,
-                                       bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal, exact_preds=exact_preds, keys=keys, intervals=intervals)
-            if verbose: print(f'({self.node.memory:,} bytes)')
+                                       bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=method, keys=keys, intervals=intervals,
+                                       selectivity_estimator=selectivity_estimator)
+            if verbose: print(f'({type(self.node.sketch)} {self.node.memory:,} bytes)')
         elif set(data.columns) == set(keys):
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'join node {tuple(data.columns)}', end='')
             level += 1
             self.node = JoinLeaf(data,
-                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, level=level, sparse=sparse, method=method, bifocal=bifocal, exact_preds=exact_preds,)
-            if verbose: print(f'({self.node.memory:,} bytes)')
+                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=method,)
+            if verbose: print(f'({type(self.node.sketch)} {self.node.memory:,} bytes)')
         elif cluster_next:
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}')
-            clusters, indices, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
+            clusters, cluster_features, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
             level += 1
-            self.node = SumNode(clusters, indices,
-                                bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose, exact_preds=exact_preds,
-                                meta_types=meta_types, pearsons=pearsons, intervals=intervals)
+            self.node = SumNode(clusters, cluster_features,
+                                bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, keys=keys, method=method, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose,
+                                meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator)
         else:
+            # print(f"2 {meta_types}")
             contained_types = {meta_types[col] for col in data.columns} if meta_types is not None else None
             corr_type = 'corr'
             sample_size = 5000
             if len(data) <= max(1, min_cluster):
-                # skip rdc calculation
+                # skip rdc calculation and assume independence
                 pairwise_corr = np.eye(data.shape[1])
-            # elif pearsons:
-            #     corr_type = 'Pearsons'
-            #     pairwise_corr = (data.sample(sample_size) if len(data) > sample_size else data).corr(method='pearson').abs().values
-            # elif meta_types is not None and contained_types == {'CONTINUOUS'}:
-            #     corr_type = 'Spearmans'
-            #     pairwise_corr = (data.sample(sample_size) if len(data) > sample_size else data).corr(method='spearman').abs().values
-            # elif meta_types is not None and contained_types == {'DISCRETE'}:
-            #     corr_type = 'cramers_v'
-            #     pairwise_corr = abs(cramers_v_matrix(data.sample(sample_size) if len(data) > sample_size else data))
+            elif corr_threshold < 0:
+                pairwise_corr = np.ones((data.shape[1], data.shape[1]))
             else:
+                # print(f"3 {meta_types}")
                 corr_type = 'RDC'
                 assert len(data) == len(features)
                 pairwise_corr = rdc(data=data,
                                     rdc_features=features.sample(sample_size) if len(features) > sample_size else features,
                                     meta_types=meta_types)
-            # pairwise_corr = data.corr(method='spearman').abs().values
-            # thresh = corr_threshold + (0.25 * level // 5) # relax threshold
             # print(pairwise_corr, thresh)
             min_corr = pairwise_corr.min()
-            components, indices = decompose(data, features, pairwise_corr, corr_thresh=corr_threshold, min_cluster=min_cluster, keys=keys)
+            components, component_features = decompose(data, features, pairwise_corr, corr_thresh=corr_threshold, min_cluster=min_cluster, keys=keys)
             if len(components) > 1:
                 if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'product node {tuple(data.columns)}{data.shape}(min. {corr_type}={min_corr:.2e})')
                 level += 1
-                self.node = ProductNode(components, indices, 
+                self.node = ProductNode(components, component_features, 
                                         bin_hashes=bin_hashes, sign_hashes=sign_hashes,
-                                        corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, use_kmeans=use_kmeans, verbose=verbose, exact_preds=exact_preds,
-                                        meta_types=meta_types, pearsons=pearsons, intervals=intervals)
+                                        corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, keys=keys, method=method, pessimistic=pessimistic, use_kmeans=use_kmeans, verbose=verbose,
+                                        meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator)
             else:
                 if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}(min. {corr_type}={min_corr:.2e})')
-                clusters, indices, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
+                clusters, cluster_features, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
                 level += 1
-                self.node = SumNode(clusters, indices,
-                                    bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, sparse=sparse, keys=keys, method=method, bifocal=bifocal, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose, exact_preds=exact_preds,
-                                    meta_types=meta_types, pearsons=pearsons, intervals=intervals)
+                self.node = SumNode(clusters, cluster_features,
+                                    bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, keys=keys, method=method, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose,
+                                    meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator)
 
         self.memory = self.node.memory
 
@@ -304,6 +272,8 @@ class SPN(object):
     def __call__(self, predicates, key, components, _root=True, **kwargs):
         if _root and not self.exact_preds:
             # cast predicate values to the correct type
+            # do not cast if using exact selectivity
+            predicates = deepcopy(predicates)
             for col in predicates.keys():
                 if col in self.dtypes:
                     print(f"cast {col} to {self.dtypes[col]}")
@@ -362,8 +332,10 @@ class SPN(object):
         return sketch_or_prob, sketch_time, copy_time
     
     def iterative(self, predicates, key, components, **kwargs):
-        # cast predicate values to the correct type
         if not self.exact_preds:
+            # cast predicate values to the correct type
+            # do not cast if using exact selectivity
+            predicates = deepcopy(predicates)
             for col in predicates.keys():
                 if col in self.dtypes:
                     print(f"cast {col} to {self.dtypes[col]}")
@@ -452,7 +424,7 @@ class SPN(object):
         return *results[self.node], copy_time
 
 class UnivariateLeaf(object):
-    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0, exact_preds=False, keys=None, intervals=None):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, method='count-sketch', keys=None, intervals=None, selectivity_estimator='count-min'):
         if type(data) is pd.DataFrame:
             data = data[data.columns[0]]
         # self.data = data
@@ -472,41 +444,44 @@ class UnivariateLeaf(object):
             is_numeric = pd.api.types.is_numeric_dtype(data)
             is_datetime = pd.api.types.is_datetime64_any_dtype(data)
             # if using exact selectivity or type is not supported
-            if exact_preds or not (is_numeric or is_datetime):
+            if selectivity_estimator == 'exact' or not (is_numeric or is_datetime):
                 print(f"Exact selectivity for {self.name} ({data.shape}) {data.dtype} {data.min()}-{data.max()})")
                 self.sketch = ExactSelectivity(data)
-            else:
+            elif selectivity_estimator == 'count-sketch':
                 self.sketch = CountSketch(data,
-                                          depth=bin_hashes[0].depth,
-                                          width=max(1000, bin_hashes[0].width // 100),
-                                          sign_hash=sign_hashes[0],
-                                          bin_hash=bin_hashes[0],
-                                          intervals=intervals[self.name] if intervals is not None and self.name in intervals else None,)
-                # self.sketch = CountMin(data,
-                #                       depth=bin_hashes[0].depth,
-                #                       width=bin_hashes[0].width // 100,
-                #                       bin_hash=bin_hashes[0],
-                #                       intervals=intervals[self.name] if intervals is not None and self.name in intervals else None,)
+                                        depth=bin_hashes[0].depth,
+                                        width=max(1000, bin_hashes[0].width // 1000),
+                                        sign_hash=sign_hashes[0],
+                                        bin_hash=bin_hashes[0],
+                                        intervals=intervals[self.name] if intervals is not None and self.name in intervals else None,)
+            elif selectivity_estimator == 'count-min':
+                self.sketch = CountMin(data,
+                                    depth=bin_hashes[0].depth,
+                                    width=max(1000, bin_hashes[0].width // 1000),
+                                    bin_hash=bin_hashes[0],
+                                    intervals=intervals[self.name] if intervals is not None and self.name in intervals else None,)
+            else:
+                raise ValueError(f'Uknown selecitivity estimator {selectivity_estimator}')
         else:
             if method == 'ams':
                 self.sketch = AMS(data,
                                 width=bin_hashes[0].width,
                                 depth=bin_hashes[0].depth,
                                 sign_hashes=sign_hashes,
-                                exact_preds=exact_preds)
-            elif method in ('bound-sketch', 'count-min'):
+                                exact_preds=True)
+            elif method in ('bound-sketch', 'count-min', 'bound-sketch-unfiltered'):
                 self.sketch = BoundSketch(data,
                                         depth=bin_hashes[0].depth,
                                         width=bin_hashes[0].width,
                                         bin_hashes=bin_hashes,
-                                        exact_preds=exact_preds)
+                                        exact_preds=True)
             else:
                 self.sketch = FastAGMS(data,
                                         depth=bin_hashes[0].depth,
                                         width=bin_hashes[0].width,
                                         sign_hashes=sign_hashes,
                                         bin_hashes=bin_hashes,
-                                        exact_preds=exact_preds)
+                                        exact_preds=True)
             
         self.memory = self.sketch.memory
         return
@@ -523,7 +498,7 @@ class UnivariateLeaf(object):
         return estimator, sketch_time, copy_time
 
 class JoinLeaf(object):
-    def __init__(self, data, bin_hashes=None, sign_hashes=None, level=0, sparse=False, method='count-sketch', bifocal=0, exact_preds=False):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, method='count-sketch'):
         self.columns = set(data.columns)
         self.size = len(data)
 
@@ -532,23 +507,20 @@ class JoinLeaf(object):
                             width=bin_hashes[0].width,
                             depth=bin_hashes[0].depth,
                             sign_hashes=sign_hashes,
-                            bifocal=bifocal,
-                            exact_preds=exact_preds)
-        elif method in ('bound-sketch', 'count-min'):
+                            exact_preds=True)
+        elif method in ('bound-sketch', 'count-min', 'bound-sketch-unfiltered'):
             self.sketch = BoundSketch(data,
                                       width=bin_hashes[0].width,
                                       depth=bin_hashes[0].depth,
                                       bin_hashes=bin_hashes,
-                                      bifocal=bifocal,
-                                      exact_preds=exact_preds)
+                                      exact_preds=True)
         else:
             self.sketch = FastAGMS(data,
                                       depth=bin_hashes[0].depth,
                                       width=bin_hashes[0].width,
                                       sign_hashes=sign_hashes,
                                       bin_hashes=bin_hashes,
-                                      bifocal=bifocal,
-                                      exact_preds=exact_preds)
+                                      exact_preds=True)
 
         self.memory = self.sketch.memory
         return

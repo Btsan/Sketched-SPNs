@@ -37,7 +37,7 @@ def empirical_copula(data, types, max_onehot_dim=512, max_discrete_dim=32, batch
                         embeddings = np.dot(embeddings, gaussian)
                     proj.append(embeddings)
                 features = np.concatenate(proj, axis=0)
-        copula[col] = ecdf(features)
+        copula[col] = ecdf(features).astype(np.float32)
     return copula
 
 def rdc_transform(data, types, k=20, s=1/6):
@@ -46,7 +46,7 @@ def rdc_transform(data, types, k=20, s=1/6):
     projections = []
     for col, features in copula.items():
         # random nonlinear projection
-        gaussian = np.random.normal(size=(features.shape[-1], k)) * (s * features.shape[-1])
+        gaussian = np.random.normal(size=(features.shape[-1], k)).astype(np.float32) * (s * features.shape[-1])
         # projections[col] = list(np.sin(np.matmul(features, gaussian)))
         projections.append(np.matmul(features, gaussian))
     nonlinear_projections = np.sin(np.concatenate(projections, axis=1))
@@ -60,16 +60,16 @@ def rdc_cca(x ,y):
     rdc = np.corrcoef(x_cca.T, y_cca.T,)[0, 1]
     return rdc
 
-def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1e-3, sample_size=-1, meta_types=None):
-    return_features = False
+def rdc(data=None, meta_types=None, rdc_features=None, projected_dim=20, var_thresh=1e-3, sample_size=-1):
     if rdc_features is None:
-        assert data is not None and types is not None
+        assert data is not None and meta_types is not None, f'data {data} meta_types are {meta_types}'
 
-        if 0 < sample_size < len(data):
-            data = data.sample(int(sample_size))
+        # if 0 < sample_size < len(data):
+        #     data = data.sample(int(sample_size))
 
-        rdc_features = rdc_transform(data, types, k=projected_dim)
-        return_features = True
+        rdc_features = rdc_transform(data.sample(int(sample_size)) if 0 < sample_size < len(data) else data, 
+                                     meta_types, 
+                                     k=projected_dim)
     else:
         if 0 < sample_size < len(rdc_features):
             rdc_features = rdc_features.sample(int(sample_size))
@@ -118,8 +118,6 @@ def rdc(data=None, types=None, rdc_features=None, projected_dim=20, var_thresh=1
             else:
                 rdc_matrix[i, j] = rdc_matrix[j, i] = rdc_cca(x, y)
 
-    if return_features:
-        return rdc_matrix, rdc_features
     return rdc_matrix
 
 

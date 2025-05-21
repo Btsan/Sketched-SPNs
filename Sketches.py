@@ -137,7 +137,8 @@ class FastAGMS(Sketch):
         # creates a dataframe with only distinct rows and their counts
         self.distincts = data.value_counts(dropna=False).sort_values(ascending=False).reset_index(name='_count')
 
-        values = self.distincts[self.columns].map(hash).values + 1 # [N, col]
+        self.vhash = np.vectorize(hash)
+        values = self.vhash(self.distincts[self.columns].values) + 1 # [N, col]
         mask = self.distincts[self.columns].notnull().values[None, :, :] # [1, N, col]
         signs = [sign_hash(values) * mask for sign_hash in sign_hashes]
         bins = [bin_hash(values) for bin_hash in bin_hashes]
@@ -166,11 +167,11 @@ class FastAGMS(Sketch):
         # memory usage of pushdown (exact) sketches
         self.pushdown = dict()
 
-        # Count-Min for predicate selectivity # just one hash suffices
+        # Count-Min for predicate selectivity
         self.countmins = {}
         if not exact_preds:
             for col in self.columns:
-                values = self.distincts[col].map(hash).values + 1 # N
+                values = self.vhash(self.distincts[col].values) + 1 # N
                 mask = self.distincts[col].notnull().values[None, :] # 1, N
                 # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
                 bins = bin_hashes[0](values) % self.width
@@ -236,7 +237,7 @@ class FastAGMS(Sketch):
                     negatives = 1
                     bins = 0
                     for key, join_indices in keys.items():
-                        values = selection[key].map(hash).values + 1
+                        values = self.vhash(selection[key].values) + 1
                         bins += self.bin_hashes[components[key]](values)
                         if separate_negatives:
                             temp = self.sign_hashes[0](values)
@@ -277,13 +278,14 @@ class FastAGMS(Sketch):
                     freq = torch.zeros((self.depth, self.width), dtype=torch.long)
                     for col in col_in_preds:
                         # cm = torch.zeros((self.depth * len(self.bin_hashes), self.width), dtype=torch.long)
-                        cm = torch.zeros((self.depth, self.width), dtype=torch.long)
+                        # cm = torch.zeros((self.depth, self.width), dtype=torch.long)
                         if len(selection) > 0:
                             values = selection[col].map(hash).values + 1
                             # bins = torch.concatenate([bin_hash(values) for bin_hash in self.bin_hashes], dim=0) # depth * b, N
                             bins = self.bin_hashes[0](values) # depth, N
-                            cm = cm.scatter_add(1, bins, torch.ones(1, dtype=torch.long).expand_as(bins))
-                        freq += self.countmins[col] * (cm > 0)
+                            # cm = cm.scatter_add(1, bins, torch.ones(1, dtype=torch.long).expand_as(bins))
+                            freq += self.countmins[col].gather(1, bins).sum(dim=1).min().item()
+                        # freq += self.countmins[col] * (cm > 0)
                     prob = freq.sum(dim=-1).min().item() / self.nrows
                 return prob, 0
 
@@ -341,7 +343,8 @@ class BoundSketch(Sketch):
         self.distincts = data.value_counts(dropna=False).sort_values(ascending=False).reset_index(name='_count')
         assert self.distincts['_count'].sum() == self.nrows
 
-        values = self.distincts[self.columns].map(hash).values + 1 # [N, col]
+        self.vhash = np.vectorize(hash)
+        values = self.vhash(self.distincts[self.columns].values) + 1 # [N, col]
         bins = [bin_hash(values) for bin_hash in bin_hashes]
         # print(f"values {values.shape} mask {mask.shape} signs {signs[0].shape} bins {bins[0].shape}")
         # self.bins = {col: [bins_all[:, :, i] for bins_all in bins] for i, col in enumerate(self.columns)}
@@ -349,7 +352,7 @@ class BoundSketch(Sketch):
         self.columns = set(self.columns)
 
         # save computed sketches
-        self.saved = dict()
+        self.sketches = dict()
 
         self.memory = self.distincts.memory_usage().sum()
 
@@ -357,11 +360,10 @@ class BoundSketch(Sketch):
         self.pushdown = dict()
 
         # Count-Min for predicate selectivity
-        # Count-Min for predicate selectivity # just one hash suffices
         self.countmins = {}
         if not exact_preds:
             for col in self.columns:
-                values = self.distincts[col].map(hash).values + 1 # N
+                values = self.vhash(self.distincts[col].values) + 1 # N
                 mask = self.distincts[col].notnull().values[None, :] # 1, N
                 # bins = torch.concatenate([bin_hash(values) for bin_hash in bin_hashes], dim=0)
                 bins = bin_hashes[0](values) % self.width
@@ -420,7 +422,7 @@ class BoundSketch(Sketch):
                     selection = selection.groupby(list(keys.keys())).sum('_count').reset_index()
                     bins = 0
                     for key, _ in keys.items():
-                        values = selection[key].map(hash).values + 1
+                        values = self.vhash(selection[key].values) + 1
                         bins += self.bin_hashes[components[key]](values)
                     bins %= self.width
                     counts = torch.tensor(selection['_count'].values)
@@ -447,13 +449,14 @@ class BoundSketch(Sketch):
                     freq = torch.zeros((self.depth,), dtype=torch.long)
                     for col in col_in_preds:
                         # cm = torch.zeros((self.depth * len(self.bin_hashes), self.width), dtype=torch.long)
-                        cm = torch.zeros((self.depth, self.width), dtype=torch.bool)
+                        # cm = torch.zeros((self.depth, self.width), dtype=torch.bool)
                         if len(selection) > 0:
                             values = selection[col].map(hash).values + 1
                             # bins = torch.concatenate([bin_hash(values) for bin_hash in self.bin_hashes], dim=0) # depth * b, N
                             bins = self.bin_hashes[0](values) # depth, N
-                            cm = cm.scatter_(1, bins, torch.ones(1, dtype=torch.bool).expand_as(bins))
-                        freq += (self.countmins[col] * cm).sum(dim=-1)
+                            # cm = cm.scatter_(1, bins, torch.ones(1, dtype=torch.bool).expand_as(bins))
+                            freq += self.countmins[col].gather(1, bins).sum(dim=1).min().item()
+                        # freq += (self.countmins[col] * cm).sum(dim=-1)
                     prob *= freq.min().item() / self.nrows
                 return prob, 0
         else:
@@ -462,8 +465,8 @@ class BoundSketch(Sketch):
 
         # check if sketch already exists
         sketch_id = frozenset(keys.keys()).union(components.items()).union({('count', count)})
-        if not col_in_preds and sketch_id in self.saved:
-            return self.saved[sketch_id].to_dense(), 0
+        if not col_in_preds and sketch_id in self.sketches:
+            return self.sketches[sketch_id].to_dense(), 0
         
         # measure sketcching time
         t0 = perf_counter_ns()
@@ -490,7 +493,7 @@ class BoundSketch(Sketch):
         
         # save sketch for reuse, if there were no predicates
         if not col_in_preds:
-            self.saved[sketch_id] = sketch.to_sparse()
+            self.sketches[sketch_id] = sketch.to_sparse()
         else:
             # record memory usage of pushdown sketches
             # assumes pushdown sketch is only ever computed once in a workload
