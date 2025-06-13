@@ -17,29 +17,29 @@ from Sketches import AMS, FastAGMS, BoundSketch
 
 ### KWiseHash package by Heddes et al. (SIGMOD 2024)
 ### https://github.com/mikeheddes/fast-multi-join-sketch - Jul 2024
-from kwisehash import KWiseHash
-class SignHash(object):
-    def __init__(self, depth, k=4) -> None:
-        self.depth = depth
-        self.fn = KWiseHash(depth, k=k)
-    def __call__(self, arr: torch.Tensor) -> torch.Tensor:
-        signs = self.fn.sign(torch.as_tensor(arr.flatten()))
-        signs = signs.reshape(self.depth, *arr.shape)
-        return signs
+# from kwisehash import KWiseHash
+# class SignHash(object):
+#     def __init__(self, depth, k=4) -> None:
+#         self.depth = depth
+#         self.fn = KWiseHash(depth, k=k)
+#     def __call__(self, arr: torch.Tensor) -> torch.Tensor:
+#         signs = self.fn.sign(torch.as_tensor(arr.flatten()))
+#         signs = signs.reshape(self.depth, *arr.shape)
+#         return signs
     
-class BinHash(object):
-    def __init__(self, depth, width, k=2) -> None:
-        self.depth = depth
-        self.width = width
-        self.fn = KWiseHash(depth, k=k)
-    def __call__(self, arr: torch.Tensor) -> torch.Tensor:
-        # extra modulo to ensure no overflow
-        bins = self.fn.bin(torch.as_tensor(arr.flatten()), self.width) % self.width
-        bins = bins.reshape(self.depth, *arr.shape)
-        return bins
+# class BinHash(object):
+#     def __init__(self, depth, width, k=2) -> None:
+#         self.depth = depth
+#         self.width = width
+#         self.fn = KWiseHash(depth, k=k)
+#     def __call__(self, arr: torch.Tensor) -> torch.Tensor:
+#         # extra modulo to ensure no overflow
+#         bins = self.fn.bin(torch.as_tensor(arr.flatten()), self.width) % self.width
+#         bins = bins.reshape(self.depth, *arr.shape)
+#         return bins
 
 ### python implementation (at least 2x slower than KWiseHash)
-# from hashes import BinHash, SignHash 
+from hashes import BinHash, SignHash 
 
 def get_hashes(depth, width, k=4):
     binhashes = BinHash(depth, width, k=k)
@@ -511,7 +511,7 @@ if __name__ == '__main__':
     parser.add_argument('--percentile', default=0.5, type=float, help='percentile of [depth] estimates used as final estimate, e.g., 0.5 for median (default) and 1 for max')
     parser.add_argument('--kmeans', action='store_true', help='use K-means to learn sum nodes (slightly faster, might increase model size)')
     # parser.add_argument('--exact_preds', action='store_true', help='use exact selectivity of predicates in leaf nodes, instead of sketch estimates')
-    # parser.add_argument('--same_sign', action='store_true', help='use same-sign estimation for count-sketch (WIP)')
+    parser.add_argument('--same_sign', action='store_true', help='use same-sign estimation for count-sketch (WIP)')
     parser.add_argument('--mean', action='store_true', help='use mean instead of percentile for estimator')
     parser.add_argument('--selectivity_estimator', type=str.lower, default='count-min', choices=['exact', 'count-min', 'count-sketch'], help='selectivity estimator in leaf nodes')
     parser.add_argument('--check_error', action='store_true', help='compute exact sketch and independence assumption sketch for comparison (best used with exact selectivity)')

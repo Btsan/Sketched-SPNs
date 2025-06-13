@@ -36,7 +36,7 @@ python sketched_spn.py \
 For training, it is recommended to specify a directory with `--pickle` to save RDC features in, especially for training multiple configurations. 
 ```bash
 python sketched_spn.py \
---pickle ./features/ \
+--pickle ./features_stats/ \
 --method count-sketch \
 --width 1e5 \
 --decompose 0 \
@@ -55,7 +55,7 @@ Alternatively, the upper-bounds estimator, Bound-Sketch, may be specified with `
 By default the program runs Stats-CEB. To specify another dataset, e.g., JOB-light, provide the `--workload`, `--data`, and `--experiment` arguments:
 ```bash
 python sketched_spn.py \
---pickle ./features/ \
+--pickle ./features_imdb/ \
 --method count-sketch \
 --width 1e5 \
 --decompose 0 \
