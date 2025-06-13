@@ -1,4 +1,5 @@
 from itertools import combinations
+import warnings
 
 import numpy as np      
 import pandas as pd
@@ -14,14 +15,14 @@ def ecdf(X):
     return r
 
 # max_discrete_dim should increase with the number of distincts per column
-def empirical_copula(data, types, max_onehot_dim=512, max_discrete_dim=32, batch_size=10000):
+def empirical_copula(data, types, max_onehot_dim=1024, max_discrete_dim=32, batch_size=10000):
     assert type(data) == pd.DataFrame
     one_hot = OneHotEncoder(max_categories=max_onehot_dim)
     copula = dict()
     for col in data:
         features = data[col].values.reshape(-1, 1) # N, 1
         if types[col] == 'DISCRETE':
-            if data[col].nunique() >= len(data) * 0.95:
+            if data[col].nunique() > len(data) * 0.95:
                 # if all values are unique, randomly set all features
                 features = np.random.normal(size=(features.shape[0], max_discrete_dim))
             else:
@@ -40,7 +41,20 @@ def empirical_copula(data, types, max_onehot_dim=512, max_discrete_dim=32, batch
         copula[col] = ecdf(features).astype(np.float32)
     return copula
 
-def rdc_transform(data, types, k=20, s=1/6):
+def rdc_transform(data, types, k=20, s=1/6): # 
+    """
+    Transforms data into a copula representation using empirical copula and random nonlinear projections.
+    Args:
+        data (pd.DataFrame): Input data.
+        types (dict): Dictionary mapping column names to their types (e.g., 'DISCRETE').
+        k (int): Number of features to project onto.
+        s (float): Scaling factor for the random projections.
+    Returns:
+        pd.DataFrame: Transformed data with MultiIndex columns representing the original columns and their features.
+    Note:
+        Smaller s -> less susceptible to noise in data and captures more general patterns.
+        Larger s -> amplifies noise in data and captures more localized patterns. 
+    """
     copula = empirical_copula(data, types)
     # projections = dict()
     projections = []
@@ -60,7 +74,7 @@ def rdc_cca(x ,y):
     rdc = np.corrcoef(x_cca.T, y_cca.T,)[0, 1]
     return rdc
 
-def rdc(data=None, meta_types=None, rdc_features=None, projected_dim=20, var_thresh=1e-3, sample_size=-1):
+def rdc(data=None, meta_types=None, rdc_features=None, projected_dim=20, projection_scale=1/6, var_thresh=1e-3, sample_size=-1):
     if rdc_features is None:
         assert data is not None and meta_types is not None, f'data {data} meta_types are {meta_types}'
 
@@ -69,7 +83,8 @@ def rdc(data=None, meta_types=None, rdc_features=None, projected_dim=20, var_thr
 
         rdc_features = rdc_transform(data.sample(int(sample_size)) if 0 < sample_size < len(data) else data, 
                                      meta_types, 
-                                     k=projected_dim)
+                                     k=projected_dim,
+                                     s=projection_scale)
     else:
         if 0 < sample_size < len(rdc_features):
             rdc_features = rdc_features.sample(int(sample_size))
@@ -88,10 +103,11 @@ def rdc(data=None, meta_types=None, rdc_features=None, projected_dim=20, var_thr
     omit = set()
     if data is not None and meta_types is not None:
         for i, col in enumerate(data.columns):
-            if meta_types[col] == 'DISCRETE' and data[col].nunique() >= len(data) * 0.99:
+            num_distincts = data[col].nunique()
+            if meta_types[col] == 'DISCRETE' and num_distincts >= len(data) * 0.99:
                 # if all values are unique, it is independent
                 omit.add(i)
-            elif data[col].nunique() == 1:
+            elif num_distincts == 1:
                 # if all values are the same, it is independent
                 omit.add(i)
     
@@ -109,14 +125,20 @@ def rdc(data=None, meta_types=None, rdc_features=None, projected_dim=20, var_thr
             x = rdc_features[cols[i]].values
             y = rdc_features[cols[j]].values
             # rdc_matrix[i, j] = rdc_matrix[j, i] = rdc_cca(x, y)
-            var_x = np.var(x, axis=0).max()
-            var_y = np.var(y, axis=0).max()
-            # print(f"{rdc_features.columns[i]}: var_x {var_x}, {rdc_features.columns[j]}: var_y {var_y}")
             # early stop if x or y has low variance (e.g., lots of duplicates)
-            if var_x < var_thresh or var_y < var_thresh:
+            if False and (np.var(x, axis=0).max() < var_thresh or np.var(y, axis=0).max() < var_thresh):
+                # don't use this - hard to set a good threshold
                 rdc_matrix[i, j] = rdc_matrix[j, i] = 0
             else:
-                rdc_matrix[i, j] = rdc_matrix[j, i] = rdc_cca(x, y)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    # try to compute CCA
+                    # if it fails, set to 0
+                    try:
+                        rdc_matrix[i, j] = rdc_matrix[j, i] = rdc_cca(x, y)
+                    except Exception:
+                        # if CCA fails, set to 0
+                        rdc_matrix[i, j] = rdc_matrix[j, i] = 0
 
     return rdc_matrix
 

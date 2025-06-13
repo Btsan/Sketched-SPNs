@@ -125,12 +125,13 @@ class AMS(Sketch):
         return sketch, sketch_time
 
 class FastAGMS(Sketch):
-    def __init__(self, data:pd.DataFrame, depth:int, width:int, sign_hashes:list, bin_hashes:list, exact_preds=False, **kwargs):
+    def __init__(self, data:pd.DataFrame, depth:int, width:int, sign_hashes:list, bin_hashes:list, exact_preds=False, sparse=False, **kwargs):
         self.depth = depth
         self.width = width
         self.nrows = len(data)
         self.sign_hashes = sign_hashes
         self.bin_hashes = bin_hashes
+        self.sparse = sparse
 
         self.columns = [data.name,] if isinstance(data, pd.Series) else list(data.columns)
 
@@ -291,7 +292,10 @@ class FastAGMS(Sketch):
 
         # check if sketch already exists
         if not col_in_preds and sketch_id in self.sketches:
-            return self.sketches[sketch_id].to_dense(), 0
+            if self.sparse:
+                return self.sketches[sketch_id].to_dense(), 0
+            else:
+                return self.sketches[sketch_id].detach().clone(), 0
 
         # measure sketcching time
         t0 = perf_counter_ns()
@@ -327,15 +331,19 @@ class FastAGMS(Sketch):
         sketch_time = (t1 - t0)
 
         if not col_in_preds:
-            self.sketches[sketch_id] = sketch.to_sparse()
+            if self.sparse:
+                self.sketches[sketch_id] = sketch.to_sparse()
+            else:
+                self.sketches[sketch_id] = sketch.detach().clone()
         return sketch, sketch_time
     
 class BoundSketch(Sketch):
-    def __init__(self, data:pd.DataFrame, depth:int, width:int, bin_hashes:list, exact_preds=False, **kwargs):
+    def __init__(self, data:pd.DataFrame, depth:int, width:int, bin_hashes:list, exact_preds=False, sparse=False, **kwargs):
         self.depth = depth
         self.width = width
         self.nrows = len(data)
         self.bin_hashes = bin_hashes
+        self.sparse = sparse
 
         self.columns = [data.name,] if isinstance(data, pd.Series) else list(data.columns)
 
@@ -466,7 +474,10 @@ class BoundSketch(Sketch):
         # check if sketch already exists
         sketch_id = frozenset(keys.keys()).union(components.items()).union({('count', count)})
         if not col_in_preds and sketch_id in self.sketches:
-            return self.sketches[sketch_id].to_dense(), 0
+            if self.sparse:
+                return self.sketches[sketch_id].to_dense(), 0
+            else:
+                return self.sketches[sketch_id].detach().clone(), 0
         
         # measure sketcching time
         t0 = perf_counter_ns()
@@ -493,7 +504,10 @@ class BoundSketch(Sketch):
         
         # save sketch for reuse, if there were no predicates
         if not col_in_preds:
-            self.sketches[sketch_id] = sketch.to_sparse()
+            if self.sparse:
+                self.sketches[sketch_id] = sketch.to_sparse()
+            else:
+                self.sketches[sketch_id] = sketch.detach().clone()
         else:
             # record memory usage of pushdown sketches
             # assumes pushdown sketch is only ever computed once in a workload

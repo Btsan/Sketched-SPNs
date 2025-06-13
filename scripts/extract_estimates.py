@@ -13,6 +13,8 @@ blacklist = ('query',
              'parent',
              'cardinality',
              'num_tables',
+             'join_components',
+             'copy_overhead',
              'join_attributes',
              'similarity')
 

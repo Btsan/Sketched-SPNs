@@ -189,7 +189,7 @@ class SPN(object):
     """Mixed Sum-Product Networks (Molina et al., 2017)
     https://arxiv.org/pdf/1710.03297.pdf
     """
-    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0, min_cluster=1e5, num_clusters=2, cluster_next=False, level=0, verbose=True, keys=None, method='count-sketch', pessimistic=False, gmm=None, use_kmeans=False, meta_types=None, intervals=None, selectivity_estimator='count-min'):
+    def __init__(self, data, features, bin_hashes=None, sign_hashes=None, corr_threshold=0, min_cluster=1e5, num_clusters=2, cluster_next=False, level=0, verbose=True, keys=None, method='count-sketch', pessimistic=False, gmm=None, use_kmeans=False, meta_types=None, intervals=None, selectivity_estimator='count-min', sparse=False):
         self.exact_preds = (selectivity_estimator == 'exact')
         if keys is None:
             keys = set()
@@ -211,13 +211,13 @@ class SPN(object):
             level += 1
             self.node = UnivariateLeaf(data,
                                        bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=method, keys=keys, intervals=intervals,
-                                       selectivity_estimator=selectivity_estimator)
+                                       selectivity_estimator=selectivity_estimator, sparse=sparse)
             if verbose: print(f'({type(self.node.sketch)} {self.node.memory:,} bytes)')
         elif set(data.columns) == set(keys):
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'join node {tuple(data.columns)}', end='')
             level += 1
             self.node = JoinLeaf(data,
-                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=method,)
+                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, method=method, sparse=sparse)
             if verbose: print(f'({type(self.node.sketch)} {self.node.memory:,} bytes)')
         elif cluster_next:
             if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}')
@@ -225,7 +225,7 @@ class SPN(object):
             level += 1
             self.node = SumNode(clusters, cluster_features,
                                 bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, keys=keys, method=method, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose,
-                                meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator)
+                                meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator, sparse=sparse)
         else:
             # print(f"2 {meta_types}")
             contained_types = {meta_types[col] for col in data.columns} if meta_types is not None else None
@@ -252,14 +252,14 @@ class SPN(object):
                 self.node = ProductNode(components, component_features, 
                                         bin_hashes=bin_hashes, sign_hashes=sign_hashes,
                                         corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, keys=keys, method=method, pessimistic=pessimistic, use_kmeans=use_kmeans, verbose=verbose,
-                                        meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator)
+                                        meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator, sparse=sparse)
             else:
                 if verbose: print('|   ' * max(0, level-1) + '\\-- ' * min(1, level) + f'sum node {tuple(data.columns)}{data.shape}(min. {corr_type}={min_corr:.2e})')
                 clusters, cluster_features, gmm = cluster(data, features, k=num_clusters, gmm=gmm, use_kmeans=use_kmeans)
                 level += 1
                 self.node = SumNode(clusters, cluster_features,
                                     bin_hashes=bin_hashes, sign_hashes=sign_hashes, corr_threshold=corr_threshold, min_cluster=min_cluster, num_clusters=num_clusters, level=level, keys=keys, method=method, pessimistic=pessimistic, gmm=gmm, use_kmeans=use_kmeans, verbose=verbose,
-                                    meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator)
+                                    meta_types=meta_types, intervals=intervals, selectivity_estimator=selectivity_estimator, sparse=sparse)
 
         self.memory = self.node.memory
 
@@ -424,7 +424,7 @@ class SPN(object):
         return *results[self.node], copy_time
 
 class UnivariateLeaf(object):
-    def __init__(self, data, bin_hashes=None, sign_hashes=None, method='count-sketch', keys=None, intervals=None, selectivity_estimator='count-min'):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, method='count-sketch', keys=None, intervals=None, selectivity_estimator='count-min', sparse=False):
         if type(data) is pd.DataFrame:
             data = data[data.columns[0]]
         # self.data = data
@@ -468,20 +468,23 @@ class UnivariateLeaf(object):
                                 width=bin_hashes[0].width,
                                 depth=bin_hashes[0].depth,
                                 sign_hashes=sign_hashes,
-                                exact_preds=True)
+                                exact_preds=True,
+                                sparse=sparse)
             elif method in ('bound-sketch', 'count-min', 'bound-sketch-unfiltered'):
                 self.sketch = BoundSketch(data,
                                         depth=bin_hashes[0].depth,
                                         width=bin_hashes[0].width,
                                         bin_hashes=bin_hashes,
-                                        exact_preds=True)
+                                        exact_preds=True,
+                                        sparse=sparse)
             else:
                 self.sketch = FastAGMS(data,
                                         depth=bin_hashes[0].depth,
                                         width=bin_hashes[0].width,
                                         sign_hashes=sign_hashes,
                                         bin_hashes=bin_hashes,
-                                        exact_preds=True)
+                                        exact_preds=True,
+                                        sparse=sparse)
             
         self.memory = self.sketch.memory
         return
@@ -498,7 +501,7 @@ class UnivariateLeaf(object):
         return estimator, sketch_time, copy_time
 
 class JoinLeaf(object):
-    def __init__(self, data, bin_hashes=None, sign_hashes=None, method='count-sketch'):
+    def __init__(self, data, bin_hashes=None, sign_hashes=None, method='count-sketch', sparse=False):
         self.columns = set(data.columns)
         self.size = len(data)
 
@@ -507,20 +510,23 @@ class JoinLeaf(object):
                             width=bin_hashes[0].width,
                             depth=bin_hashes[0].depth,
                             sign_hashes=sign_hashes,
-                            exact_preds=True)
+                            exact_preds=True,
+                            sparse=sparse)
         elif method in ('bound-sketch', 'count-min', 'bound-sketch-unfiltered'):
             self.sketch = BoundSketch(data,
                                       width=bin_hashes[0].width,
                                       depth=bin_hashes[0].depth,
                                       bin_hashes=bin_hashes,
-                                      exact_preds=True)
+                                      exact_preds=True,
+                                      sparse=sparse)
         else:
             self.sketch = FastAGMS(data,
                                       depth=bin_hashes[0].depth,
                                       width=bin_hashes[0].width,
                                       sign_hashes=sign_hashes,
                                       bin_hashes=bin_hashes,
-                                      exact_preds=True)
+                                      exact_preds=True,
+                                      sparse=sparse)
 
         self.memory = self.sketch.memory
         return
