@@ -73,6 +73,8 @@ def exact_sketch(data, bin_hashes=None, sign_hashes=None, method='count-sketch')
 
     return sketch
 
+# sketch cross-correlation method from https://github.com/mikeheddes/fast-multi-join-sketch
+# assumes multivariate sketches are convolved
 def cross_correlate(node, query, id2sketch, visited=None):
     """Should not modify the sketches. Avoid in-place operations, e.g., *=, +=..."""
     if visited is None:

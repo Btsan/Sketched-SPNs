@@ -149,7 +149,8 @@ def predicates_keys_from(query):
 
     return predicates, dict(keys)
 
-from typing import Literal, Optional, Generator, Tuple, Dict, List, Set, Any, Union
+# following from https://github.com/mikeheddes/fast-multi-join-sketch
+from typing import Generator, Tuple, Dict, List, Set
 import re
 import random
 
