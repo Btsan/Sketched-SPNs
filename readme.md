@@ -43,6 +43,8 @@ python sketched_spn.py \
 --min_cluster 0.1 
 ```
 
+`--decompose` sets the RDC independence threshold
+
 If time and memory are concerns, a larger minimum cluster size threshold can be specified with `--min_cluster` to decrease model size, at the expense of accuracy.
 Using `--selectivity_estimator exact` also reduces model size by not creating sketches (defaults to count-min) for selectivity estimation in the leaf nodes.
 
@@ -69,3 +71,15 @@ python sketched_spn.py \
 Note: JOB-light contains ~100x more data than Stats-CEB and requires a lot of memory (>10 GB) to featurize, which our implementation simply performs all at once prior to learning SPNs. Prior implementations of SPNs might learn the structure of the network from a sample of the data, but this is not yet implemented here. 
 
 New datasets require extending [experiments.py](/experiments.py) with their schemas, e.g., specifying join keys, column names and types.
+
+```bibtex
+@misc{tsan2025sketchedsumproductnetworksjoins,
+      title={Sketched Sum-Product Networks for Joins}, 
+      author={Brian Tsan and Abylay Amanbayev and Asoke Datta and Florin Rusu},
+      year={2025},
+      eprint={2506.14034},
+      archivePrefix={arXiv},
+      primaryClass={cs.DB},
+      url={https://arxiv.org/abs/2506.14034}, 
+}
+```
