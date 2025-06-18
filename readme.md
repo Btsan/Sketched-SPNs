@@ -72,6 +72,10 @@ Note: JOB-light contains ~100x more data than Stats-CEB and requires a lot of me
 
 New datasets require extending [experiments.py](/experiments.py) with their schemas, e.g., specifying join keys, column names and types.
 
+## Paper
+
+An overview of this program and its experimental results can be found in [our paper](https://www.arxiv.org/abs/2506.14034)
+
 ```bibtex
 @misc{tsan2025sketchedsumproductnetworksjoins,
       title={Sketched Sum-Product Networks for Joins}, 
