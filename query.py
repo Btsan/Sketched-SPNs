@@ -149,15 +149,12 @@ def predicates_keys_from(query):
 
     return predicates, dict(keys)
 
-# following from https://github.com/mikeheddes/fast-multi-join-sketch
 from typing import Generator, Tuple, Dict, List, Set
 import re
 import random
 
-camel_to_snake_re = re.compile(r"(?<!^)(?=[A-Z])")
 selection_ops_re = re.compile(r"(\>\=?|\<\=?|\<\>|\=|BETWEEN|IN|LIKE|NOT LIKE)")
 attribute_re = re.compile(r"(_|[a-zA-Z])(_|\d|[a-zA-Z])*.(_|[a-zA-Z])+")
-escaped_backslash_re = re.compile(r"\\\"")
 
 
 def text_between(input: str, start: str, end: str):
@@ -172,57 +169,53 @@ def text_between(input: str, start: str, end: str):
 class Query(object):
     sql: str
     joins: List[Tuple[str, str, str]]
-    # selects: List[Tuple[str, str, str]]
     selects: Dict[str, Dict[str, Dict[str, str]]]
     node2component: Dict[str, int]
     num_components: int
-    id2joined_attrs: Dict[str, Dict[str, Tuple[int]]]
+    alias2joined_attrs: Dict[str, Dict[str, Tuple[int]]]
 
     def __init__(self, sql: str):
         self.sql = sql
 
+        # extract join and selection predicates
         self.joins = []
-        # self.selects = defaultdict(lambda: defaultdict(lambda: dict()))
         self.selects = dict()
-
         for left, op, right, is_select in self.condition_iter():
             if is_select:
-                # self.selects.append((left, op, right))
                 alias, col = left.split('.')
-                # self.selects[alias][col][op] = right
                 if alias not in self.selects:
-                    self.selects[alias] = dict()
-                if col not in self.selects[alias]:
+                    self.selects[alias] = {col: dict()}
+                elif col not in self.selects[alias]:
                     self.selects[alias][col] = dict()
                 self.selects[alias][col][op] = right
             else:
                 self.joins.append((left, op, right))
 
+        # label each transitive join component
         self.node2component, self.num_components = self.component_labeling(self.joins)
 
-        # self.id2joined_attrs: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(list))
-        self.id2joined_attrs: Dict[str, Dict[str, int]] = dict()
-
+        # label each attribute with their join(s)
+        self.alias2joined_attrs: Dict[str, Dict[str, int]] = dict()
         for idx, join in enumerate(self.joins):
             left, _, right = join
 
-            id, attr = left.split(".")
-            if id not in self.id2joined_attrs:
-                self.id2joined_attrs[id] = dict()
-            if attr not in self.id2joined_attrs[id]:
-                self.id2joined_attrs[id][attr] = list()
-            self.id2joined_attrs[id][attr].append(idx)
+            alias, attr = left.split(".")
+            if alias not in self.alias2joined_attrs:
+                self.alias2joined_attrs[alias] = dict()
+            if attr not in self.alias2joined_attrs[alias]:
+                self.alias2joined_attrs[alias][attr] = list()
+            self.alias2joined_attrs[alias][attr].append(idx)
 
-            id, attr = right.split(".")
-            if id not in self.id2joined_attrs:
-                self.id2joined_attrs[id] = dict()
-            if attr not in self.id2joined_attrs[id]:
-                self.id2joined_attrs[id][attr] = list()
-            self.id2joined_attrs[id][attr].append(idx)
+            alias, attr = right.split(".")
+            if alias not in self.alias2joined_attrs:
+                self.alias2joined_attrs[alias] = dict()
+            if attr not in self.alias2joined_attrs[alias]:
+                self.alias2joined_attrs[alias][attr] = list()
+            self.alias2joined_attrs[alias][attr].append(idx)
         
-        for id in self.id2joined_attrs:
-            for attr in self.id2joined_attrs[id]:
-                self.id2joined_attrs[id][attr] = tuple(self.id2joined_attrs[id][attr])
+        for alias in self.alias2joined_attrs:
+            for attr in self.alias2joined_attrs[alias]:
+                self.alias2joined_attrs[alias][attr] = tuple(self.alias2joined_attrs[alias][attr])
 
     def __repr__(self) -> str:
         return self.sql
@@ -240,12 +233,12 @@ class Query(object):
             if len(splits) == 1:
                 splits = table.split(" ", maxsplit=1)
             
-            name, id = splits
+            name, alias = splits
 
             name = name.strip()
-            id = id.strip()
+            alias = alias.strip()
 
-            yield id, name
+            yield alias, name
 
     def condition_iter(self) -> Generator[Tuple[str, str, str, bool], None, None]:
 
@@ -259,6 +252,9 @@ class Query(object):
 
         if " OR " in selections:
             raise NotImplementedError("OR selections are not supported yet.")
+
+        if " BETWEEN " in selections:
+            raise NotImplementedError("BETWEEN keyword not allowed")
 
         selections = re.split("\sAND\s", selections)
         # print(selections)
@@ -300,7 +296,7 @@ class Query(object):
         num_components = 0
 
         for join in joins:
-            left, op, right = join
+            left, _, right = join
 
             to_visit.add(left)
             to_visit.add(right)
@@ -309,7 +305,7 @@ class Query(object):
             node2component[node] = component
 
             for join in joins:
-                left, op, right = join
+                left, _, right = join
 
                 # get the other node if this join involves the current node
                 # if not then continue to the next join

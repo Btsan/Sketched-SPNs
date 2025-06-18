@@ -209,23 +209,38 @@ class SPN(object):
     
     def memory_usage(self):
         return self.node.memory_usage()
+    
+
+    def cast_predicates(self, predicates):
+        """cast predicate values (presumably strings) to their correct datatype"""
+        predicates = deepcopy(predicates)
+        for col in predicates.keys():
+            if col in self.dtypes:
+                print(f"cast {col} to {self.dtypes[col]}")
+                # if type is a datetime, convert to nanoseconds since last epoch
+                use_nanoseconds = pd.api.types.is_datetime64_any_dtype(self.dtypes[col])
+                for op, val in predicates[col].items():
+                    print(f"\tcast {col} {op} {val} to {self.dtypes[col]}")
+                    if str.upper(op) == 'BETWEEN':
+                        val_1, val_2 = val.split(' AND ')
+                        print(f"\t\tsplit {col} {op} {val} to {col} >= {val_1} AND {col} <= {val_2}")
+                        if use_nanoseconds:
+                            predicates[col]['>='] = pd.to_datetime(val_1).value
+                            predicates[col]['<='] = pd.to_datetime(val_2).value
+                        else:
+                            predicates[col]['>='] = self.dtypes[col].type(val_1)
+                            predicates[col]['<='] = self.dtypes[col].type(val_2)
+                    elif use_nanoseconds:
+                        predicates[col][op] = pd.to_datetime(val).value
+                    else:
+                        predicates[col][op] = self.dtypes[col].type(val)
+        return predicates
 
     def __call__(self, predicates, key, components, _root=True, **kwargs):
         if _root and not self.exact_preds:
             # cast predicate values to the correct type
             # do not cast if using exact selectivity
-            predicates = deepcopy(predicates)
-            for col in predicates.keys():
-                if col in self.dtypes:
-                    print(f"cast {col} to {self.dtypes[col]}")
-                    # if type is a datetime, convert to nanoseconds since last epoch
-                    use_nanoseconds = pd.api.types.is_datetime64_any_dtype(self.dtypes[col])
-                    for op, val in predicates[col].items():
-                        print(f"\tcast {col} {op} {val} to {self.dtypes[col]}")
-                        if use_nanoseconds:
-                            predicates[col][op] = pd.to_datetime(val).value
-                        else:
-                            predicates[col][op] = self.dtypes[col].type(val)
+            predicates = self.cast_predicates(predicates)
 
         col_in_preds = self.columns.intersection(predicates.keys())
         col_in_keys = self.columns.intersection(key.keys())
@@ -276,18 +291,7 @@ class SPN(object):
         if not self.exact_preds:
             # cast predicate values to the correct type
             # do not cast if using exact selectivity
-            predicates = deepcopy(predicates)
-            for col in predicates.keys():
-                if col in self.dtypes:
-                    print(f"cast {col} to {self.dtypes[col]}")
-                    # if type is a datetime, convert to nanoseconds since last epoch
-                    use_nanoseconds = pd.api.types.is_datetime64_any_dtype(self.dtypes[col])
-                    for op, val in predicates[col].items():
-                        print(f"\tcast {col} {op} {val} to {self.dtypes[col]}")
-                        if use_nanoseconds:
-                            predicates[col][op] = pd.to_datetime(val).value
-                        else:
-                            predicates[col][op] = self.dtypes[col].type(val)
+            predicates = self.cast_predicates(predicates)
 
         col_in_preds = self.columns.intersection(predicates.keys())
         sketch_id = frozenset(key.items()).union(components.items()).union(kwargs.items())

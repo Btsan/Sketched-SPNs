@@ -17,29 +17,29 @@ from Sketches import AMS, FastAGMS, BoundSketch
 
 ### KWiseHash package by Heddes et al. (SIGMOD 2024)
 ### https://github.com/mikeheddes/fast-multi-join-sketch - Jul 2024
-# from kwisehash import KWiseHash
-# class SignHash(object):
-#     def __init__(self, depth, k=4) -> None:
-#         self.depth = depth
-#         self.fn = KWiseHash(depth, k=k)
-#     def __call__(self, arr: torch.Tensor) -> torch.Tensor:
-#         signs = self.fn.sign(torch.as_tensor(arr.flatten()))
-#         signs = signs.reshape(self.depth, *arr.shape)
-#         return signs
+from kwisehash import KWiseHash
+class SignHash(object):
+    def __init__(self, depth, k=4) -> None:
+        self.depth = depth
+        self.fn = KWiseHash(depth, k=k)
+    def __call__(self, arr: torch.Tensor) -> torch.Tensor:
+        signs = self.fn.sign(torch.as_tensor(arr.flatten()))
+        signs = signs.reshape(self.depth, *arr.shape)
+        return signs
     
-# class BinHash(object):
-#     def __init__(self, depth, width, k=2) -> None:
-#         self.depth = depth
-#         self.width = width
-#         self.fn = KWiseHash(depth, k=k)
-#     def __call__(self, arr: torch.Tensor) -> torch.Tensor:
-#         # extra modulo to ensure no overflow
-#         bins = self.fn.bin(torch.as_tensor(arr.flatten()), self.width) % self.width
-#         bins = bins.reshape(self.depth, *arr.shape)
-#         return bins
+class BinHash(object):
+    def __init__(self, depth, width, k=2) -> None:
+        self.depth = depth
+        self.width = width
+        self.fn = KWiseHash(depth, k=k)
+    def __call__(self, arr: torch.Tensor) -> torch.Tensor:
+        # extra modulo to ensure no overflow
+        bins = self.fn.bin(torch.as_tensor(arr.flatten()), self.width) % self.width
+        bins = bins.reshape(self.depth, *arr.shape)
+        return bins
 
 ### python implementation (at least 2x slower than KWiseHash)
-from hashes import BinHash, SignHash 
+# from hashes import BinHash, SignHash 
 
 def get_hashes(depth, width, k=4):
     binhashes = BinHash(depth, width, k=k)
@@ -73,28 +73,26 @@ def exact_sketch(data, bin_hashes=None, sign_hashes=None, method='count-sketch')
 
     return sketch
 
-# sketch cross-correlation method from https://github.com/mikeheddes/fast-multi-join-sketch
-# assumes multivariate sketches are convolved
-def cross_correlate(node, query, id2sketch, visited=None):
+def cross_correlate(node, query, alias2sketch, visited=None):
     """Should not modify the sketches. Avoid in-place operations, e.g., *=, +=..."""
     if visited is None:
         visited = set()
-    id, key = node.split('.')
+    alias, key = node.split('.')
     visited.add(node)
-    sketch = id2sketch[id]
+    sketch = alias2sketch[alias]
 
-    for other_node in query.joined_nodes(id):
+    for other_node in query.joined_nodes(alias):
         # skip current node
         if other_node == node:
             continue
         visited.add(other_node)
         tmp = 1
         for joined_node in query.joined_with(other_node):
-            tmp = tmp * cross_correlate(joined_node, query, id2sketch, visited=visited)
+            tmp = tmp * cross_correlate(joined_node, query, alias2sketch, visited=visited)
         sketch = ifft(fft(tmp).conj() * fft(sketch)).real
 
     for joined_node in query.joined_with(node).difference(visited):
-        sketch = sketch * cross_correlate(joined_node, query, id2sketch, visited=visited)
+        sketch = sketch * cross_correlate(joined_node, query, alias2sketch, visited=visited)
     return sketch
 
 def bound_unfiltered_degree_estimate(query, models, exact, cuda=False, exact_prob=False, exact_degree=False):
@@ -104,14 +102,14 @@ def bound_unfiltered_degree_estimate(query, models, exact, cuda=False, exact_pro
 
     sketch_list = []
     tables = tuple(query.table_mapping_iter())
-    for id_count, name_count in tables:
+    for alias_count, name_count in tables:
         sketches = dict()
 
-        predicates = dict() if id_count not in query.selects else query.selects[id_count]
-        keys = query.id2joined_attrs[id_count]
+        predicates = dict() if alias_count not in query.selects else query.selects[alias_count]
+        keys = query.alias2joined_attrs[alias_count]
         components = dict()
         for attr in keys:
-            node = f"{id_count}.{attr}"
+            node = f"{alias_count}.{attr}"
             components[attr] = query.node2component[node]
         print(f'{name_count} components', components)
 
@@ -135,7 +133,7 @@ def bound_unfiltered_degree_estimate(query, models, exact, cuda=False, exact_pro
         # double check before anythng else
         if isinstance(sketch, (int, float)):
             assert sketch == 0, sketch
-            print(f"Sketch of {id_count}({keys.values()}) having {predicates} is 0")
+            print(f"Sketch of {alias_count}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
@@ -143,19 +141,19 @@ def bound_unfiltered_degree_estimate(query, models, exact, cuda=False, exact_pro
                     pd.Timedelta(0))
         
         # print(sketch)
-        sketches[id_count] = sketch if not cuda else sketch.cuda()
+        sketches[alias_count] = sketch if not cuda else sketch.cuda()
 
-        for id_degree, name_degree in tables:
-            if id_count == id_degree:
+        for alias_degree, name_degree in tables:
+            if alias_count == alias_degree:
                 continue
-            if id_degree in query.selects and exact_degree:
-                predicates = query.selects[id_degree]
+            if alias_degree in query.selects and exact_degree:
+                predicates = query.selects[alias_degree]
             else:
                 predicates = dict()
-            keys = query.id2joined_attrs[id_degree]
+            keys = query.alias2joined_attrs[alias_degree]
             components = dict()
             for attr in keys:
-                node = f"{id_degree}.{attr}"
+                node = f"{alias_degree}.{attr}"
                 components[attr] = query.node2component[node]
             print(f'{name_degree} components', components)
 
@@ -173,7 +171,7 @@ def bound_unfiltered_degree_estimate(query, models, exact, cuda=False, exact_pro
             # double check before anythng else
             if isinstance(sketch, (int, float)):
                 assert sketch == 0, sketch
-                print(f"Sketch of {id_degree}({keys.values()}) having {predicates} is 0")
+                print(f"Sketch of {alias_degree}({keys.values()}) having {predicates} is 0")
                 return (0,
                         pd.Timedelta(sum(inference_times), unit='ns'),
                         pd.Timedelta(sum(sketching_times), unit='ns'),
@@ -181,7 +179,7 @@ def bound_unfiltered_degree_estimate(query, models, exact, cuda=False, exact_pro
                         pd.Timedelta(0))
             
             # print(sketch)
-            sketches[id_degree] = sketch if not cuda else sketch.cuda()
+            sketches[alias_degree] = sketch if not cuda else sketch.cuda()
 
         sketch_list.append(sketches)
 
@@ -216,12 +214,12 @@ def count_estimate(query, models, cuda=False, method='count-sketch', percentile=
     sketches = dict()
     use_count = True
     l1_bounds = dict()
-    for id, name in query.table_mapping_iter():
-        predicates = dict() if id not in query.selects else query.selects[id]
-        keys = query.id2joined_attrs[id]
+    for alias, name in query.table_mapping_iter():
+        predicates = dict() if alias not in query.selects else query.selects[alias]
+        keys = query.alias2joined_attrs[alias]
         components = dict()
         for attr in keys:
-            node = f"{id}.{attr}"
+            node = f"{alias}.{attr}"
             components[attr] = query.node2component[node]
         print(f'{name} components', components)
 
@@ -245,7 +243,7 @@ def count_estimate(query, models, cuda=False, method='count-sketch', percentile=
         # double check before anythng else
         if isinstance(sketch, (int, float)):
             assert sketch == 0, sketch
-            print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
+            print(f"Sketch of {alias}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
@@ -265,7 +263,7 @@ def count_estimate(query, models, cuda=False, method='count-sketch', percentile=
         
 
         # print(sketch)
-        sketches[id] = sketch if not cuda else sketch.cuda()
+        sketches[alias] = sketch if not cuda else sketch.cuda()
 
     total_inference = pd.Timedelta(sum(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
@@ -298,12 +296,12 @@ def bound_estimate(query, models, cuda=False, exact_prob=False, exact=None, inde
     count_sketches = dict()
     degree_sketches = dict()
     l1_bounds = dict()
-    for id, name in query.table_mapping_iter():
-        predicates = dict() if id not in query.selects else query.selects[id]
-        keys = query.id2joined_attrs[id]
+    for alias, name in query.table_mapping_iter():
+        predicates = dict() if alias not in query.selects else query.selects[alias]
+        keys = query.alias2joined_attrs[alias]
         components = dict()
         for attr in keys:
-            node = f"{id}.{attr}"
+            node = f"{alias}.{attr}"
             components[attr] = query.node2component[node]
         print(f'{name} components', components)
 
@@ -327,7 +325,7 @@ def bound_estimate(query, models, cuda=False, exact_prob=False, exact=None, inde
         # double check before anythng else
         if isinstance(sketch, (int, float)):
             assert sketch == 0, sketch
-            print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
+            print(f"Sketch of {alias}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
@@ -343,7 +341,7 @@ def bound_estimate(query, models, cuda=False, exact_prob=False, exact=None, inde
             l1_bounds[name] = (l1_dist, l1_upper)
 
         # print(sketch)
-        count_sketches[id] = sketch if not cuda else sketch.cuda()
+        count_sketches[alias] = sketch if not cuda else sketch.cuda()
 
         # repeat for degree sketches
         t0 = perf_counter_ns()
@@ -366,14 +364,14 @@ def bound_estimate(query, models, cuda=False, exact_prob=False, exact=None, inde
         # double check before anythng else
         if isinstance(sketch, (int, float)):
             assert sketch == 0, sketch
-            print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
+            print(f"Sketch of {alias}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
                     pd.Timedelta(sum(copy_times), unit='ns'),
                     pd.Timedelta(0))
 
-        degree_sketches[id] = sketch if not cuda else sketch.cuda()
+        degree_sketches[alias] = sketch if not cuda else sketch.cuda()
 
     total_inference = pd.Timedelta(sum(inference_times), unit='ns')
     total_sketching = pd.Timedelta(sum(sketching_times), unit='ns')
@@ -382,11 +380,11 @@ def bound_estimate(query, models, cuda=False, exact_prob=False, exact=None, inde
     estimates = []
 
     t0 = perf_counter_ns()
-    for count_id, count_sketch in count_sketches.items():
+    for count_alias, count_sketch in count_sketches.items():
         # combine sketches, such that only one sketch is a count sketch
-        sketches = {degree_id: degree_sketch for degree_id, degree_sketch in degree_sketches.items() if degree_id != count_id}
+        sketches = {degree_alias: degree_sketch for degree_alias, degree_sketch in degree_sketches.items() if degree_alias != count_alias}
         # add count sketch to the sketches
-        sketches[count_id] = count_sketch
+        sketches[count_alias] = count_sketch
 
         # cross correlate sketches
         start_node = query.random_node()
@@ -411,12 +409,12 @@ def same_sign_estimate(query, models, cuda=False, percentile=0.5, exact_prob=Fal
     sketches = dict()
     negatives = dict()
     num_factors = 0
-    for id, name in query.table_mapping_iter():
-        predicates = dict() if id not in query.selects else query.selects[id]
-        keys = query.id2joined_attrs[id]
+    for alias, name in query.table_mapping_iter():
+        predicates = dict() if alias not in query.selects else query.selects[alias]
+        keys = query.alias2joined_attrs[alias]
         components = dict()
         for attr in keys:
-            node = f"{id}.{attr}"
+            node = f"{alias}.{attr}"
             components[attr] = query.node2component[node]
         print(f'{name} components', components)
 
@@ -442,7 +440,7 @@ def same_sign_estimate(query, models, cuda=False, percentile=0.5, exact_prob=Fal
         # double check before anythng else
         if isinstance(sketch, (int, float)):
             assert sketch == 0, sketch
-            print(f"Sketch of {id}({keys.values()}) having {predicates} is 0")
+            print(f"Sketch of {alias}({keys.values()}) having {predicates} is 0")
             return (0,
                     pd.Timedelta(sum(inference_times), unit='ns'),
                     pd.Timedelta(sum(sketching_times), unit='ns'),
@@ -451,8 +449,8 @@ def same_sign_estimate(query, models, cuda=False, percentile=0.5, exact_prob=Fal
         
         # print(sketch)
         width = sketch.shape[-1]
-        sketches[id] = sketch[:, :width//2] if not cuda else sketch[:, :width//2].cuda()
-        negatives[id] = sketch[:, width//2:] if not cuda else sketch[:, width//2:].cuda()
+        sketches[alias] = sketch[:, :width//2] if not cuda else sketch[:, :width//2].cuda()
+        negatives[alias] = sketch[:, width//2:] if not cuda else sketch[:, width//2:].cuda()
 
     # sum for total sequential inference time
     # max for longest parallel inference time of all models
@@ -501,7 +499,7 @@ if __name__ == '__main__':
     parser.add_argument('--writefile', default=Path('out.csv'), type=Path, help='name of output csv file')
     parser.add_argument('--k', default=2, type=int, help='each Sum Node partitions data into k>=2 clusters')
     parser.add_argument('--decompose', '--rdc_threshold', default=0.01, type=float, help='group columns with pairwise RDC above this threshold')
-    parser.add_argument('--min_cluster', default=0.2, type=float, help='minimum clustering size for sum nodes, i.e., treated as a percentage if less than 1')
+    parser.add_argument('--min_cluster', default=0.1, type=float, help='minimum clustering size for sum nodes, i.e., treated as a percentage if less than 1')
     parser.add_argument('--cluster_first', action='store_true', help='force the root layer to be a Sum Node (cluster first)')
     parser.add_argument('--experiment', type=str.lower, default='stats-ceb', choices=['job-light', 'stats-ceb'])
     parser.add_argument('--find_keys', action='store_true', help='analyze columns in workload instead of running estimation e.g., to prepare experimental config')
@@ -695,8 +693,8 @@ if __name__ == '__main__':
             # max(max(est, 1), row['cardinality']) / max(min(abs(est), row['cardinality']), 1)
             query_time = pd.Timedelta(perf_counter_ns() - query_start, unit='ns')
 
-            workload.loc[i, 'num_tables'] = len(nodes)
-            workload.loc[i, 'join_components'] = num_components
+            workload.loc[i, 'num_tables'] = sum(1 for _ in query.table_mapping_iter())
+            workload.loc[i, 'join_components'] = query.num_components
             workload.loc[i, 'inference_time'] = inference_time
             workload.loc[i, 'sketching_time'] = sketching_time
             workload.loc[i, 'copy_overhead'] = copying_time
@@ -745,7 +743,7 @@ if __name__ == '__main__':
             print(f"Total Structure Learning Time: {total_training} (avg. {total_training / len(models)})")
             print(f"Total Model Inference Time: {workload['inference_time'].sum()} (avg. {workload['inference_time'].mean()})")
             print(f"Total Model Copying Overhead: {workload['copy_overhead'].sum()} (avg. {workload['copy_overhead'].mean()})")
-        print(f"Total Estimation Time: {workload['estimation_time'].sum()} (avg. {workload['copy_overhead'].mean()})")
+        print(f"Total Estimation Time: {workload['estimation_time'].sum()} (avg. {workload['estimation_time'].mean()})")
         print(f"Total Workload Time: {workload['total_time'].sum()} (avg. {workload['total_time'].mean()})")
 
         # compute memory usage due to sketches after running workload

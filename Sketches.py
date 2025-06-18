@@ -103,7 +103,7 @@ class AMS(Sketch):
         # check if sketch already exists
         sketch_id = frozenset(keys.items())
         if not col_in_preds and sketch_id in self.saved:
-            return self.saved[sketch_id].to_dense(), 0
+            return self.saved[sketch_id].clone(), 0
         
         # measure sketcching time
         t0 = perf_counter_ns()
@@ -121,7 +121,7 @@ class AMS(Sketch):
 
         # save sketch for reuse, if there were no predicates
         if not col_in_preds:
-            self.saved[sketch_id] = sketch.to_sparse()
+            self.saved[sketch_id] = sketch.detach().clone()
         return sketch, sketch_time
 
 class FastAGMS(Sketch):
@@ -281,7 +281,7 @@ class FastAGMS(Sketch):
             if self.sparse:
                 return self.sketches[sketch_id].to_dense(), 0
             else:
-                return self.sketches[sketch_id].detach().clone(), 0
+                return self.sketches[sketch_id].clone(), 0
 
         # measure sketcching time
         t0 = perf_counter_ns()
@@ -456,7 +456,7 @@ class BoundSketch(Sketch):
             if self.sparse:
                 return self.sketches[sketch_id].to_dense(), 0
             else:
-                return self.sketches[sketch_id].detach().clone(), 0
+                return self.sketches[sketch_id].clone(), 0
         
         # measure sketcching time
         t0 = perf_counter_ns()
