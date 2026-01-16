@@ -1,19 +1,14 @@
 def get_config(experiment:str):
-    primary = dict()
     dates = dict()
     intervals = dict()
     tables = dict()
 
-    # todo: discrete is intended as non-ordinal
+    # note: discrete is intended as non-ordinal
     DISCRETE = 'DISCRETE'
     CONTINUOUS = 'CONTINUOUS'
 
     # note: dates are treated as nanoseconds (1e-9 seconds)
-    TIMESTAMP_INTERVAL_PRESET = (10**9 * 60, # minutes
-                                 10**9 * 300, # 5 minutes
-                                 10**9 * 600, # 10 minutes
-                                 10**9 * 1800, # 30 minutes
-                                 10**9 * 3600, # hours
+    TIMESTAMP_INTERVAL_PRESET = (10**9 * 3600, # hours
                                  10**9 * 3600 * 2, # 2 hours
                                  10**9 * 3600 * 4, # 4 hours
                                  10**9 * 3600 * 12, # 12 hours
@@ -26,14 +21,6 @@ def get_config(experiment:str):
 
     # note: if col_types order changes, old rdc features are invalidated
     if experiment == 'stats-ceb':
-        primary = {'badges': {'Id'},
-                   'posts': {'Id'},
-                   'postLinks': {'Id'},
-                   'postHistory': {'Id'},
-                   'comments': {'Id'},
-                   'tags': {'Id'},
-                   'users': {'Id'},
-                   'votes': {'Id'},}
         dates = {'badges': {'Date',},
                  'comments': {'CreationDate',},
                  'postHistory': {'CreationDate',},
@@ -125,9 +112,7 @@ def get_config(experiment:str):
                                         'BountyAmount': CONTINUOUS},
                             'keys': {'UserId', 'PostId'}}}
     elif experiment == 'job-light':
-        primary = {'title': {'id'}}
         dates = dict()
-        intervals = dict()
         intervals = {'title': {'production_year': (1, 2, 4, 8 ,16, 32),}}
         tables = {'title': {'names': ['id', 'title', 'imdb_index', 'kind_id', 'production_year',
                                 'imdb_id', 'phonetic_code', 'episode_of_id', 'season_nr',
@@ -157,19 +142,115 @@ def get_config(experiment:str):
                             'col_types': {'role_id': DISCRETE,
                                           'movie_id': DISCRETE},
                             'keys': {'movie_id'}}}
-
+    elif experiment == 'job':
+        dates = dict()
+        intervals = {'title': {'production_year': (1, 2, 4, 8 ,16, 32),
+                               'episode_nr': (1, 2, 4, 8, 16, 32)}}
+        tables = {'title': {'names': ['id', 'title', 'imdb_index', 'kind_id', 'production_year',
+                                'imdb_id', 'phonetic_code', 'episode_of_id', 'season_nr',
+                                'episode_nr', 'series_years', 'md5sum'],
+                            'col_types': {'id': DISCRETE,
+                                          'kind_id': DISCRETE,
+                                          'production_year': CONTINUOUS,
+                                          'title': DISCRETE, # LIKE
+                                          'episode_nr': CONTINUOUS},
+                            'keys': {'id', 'kind_id'},},
+                'movie_companies': {'names': ['id', 'movie_id', 'company_id', 'company_type_id', 'note'],
+                                    'col_types': {'company_type_id': DISCRETE,
+                                                  'company_id': DISCRETE,
+                                                  'movie_id': DISCRETE,
+                                                  'note': DISCRETE}, # LIKE
+                                    'keys': {'movie_id', 'company_id', 'company_type_id'},},
+                'keyword': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'keyword': DISCRETE,}, # LIKE
+                                    'keys': {'id'},},
+                'movie_keyword': {'names': ['id', 'movie_id', 'keyword_id'],
+                                    'col_types': {'keyword_id': DISCRETE,
+                                                  'movie_id': DISCRETE},
+                                    'keys': {'movie_id', 'keyword_id'},},
+                'company_name': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'country_code': DISCRETE,
+                                                  'name': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'info_type': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'cast_info': {'names': ['id', 'person_id', 'movie_id', 'person_role_id', 'note', 'nr_order', 'role_id'],
+                            'col_types': {'role_id': DISCRETE,
+                                          'movie_id': DISCRETE,
+                                          'person_id': DISCRETE,
+                                          'person_role_id': DISCRETE,
+                                          'note': DISCRETE}, # LIKE
+                            'keys': {'movie_id', 'person_id', 'person_role_id', 'role_id'}},
+                'movie_info': {'names': ['id', 'movie_id', 'info_type_id', 'info', 'note'],
+                                'col_types': {'info_type_id': DISCRETE,
+                                              'movie_id': DISCRETE,
+                                              'info': DISCRETE, # LIKE
+                                              'note': DISCRETE}, # LIKE
+                                'keys': {'movie_id', 'info_type_id'},},
+                'name': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'gender': DISCRETE,
+                                                  'name': DISCRETE, # LIKE
+                                                  'name_pcode_cf': CONTINUOUS}, # LIKE
+                                    'keys': {'id'},},
+                'movie_info_idx': {'names': ['id', 'movie_id', 'info_type_id', 'info', 'note'],
+                                    'col_types': {'info_type_id': DISCRETE,
+                                                  'movie_id': DISCRETE},
+                                    'keys': {'movie_id', 'info_type_id'},},
+                'company_type': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'kind_type': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'aka_name': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'char_name': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'complete_cast': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'comp_cast_type': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'role_type': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'link_type': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'movie_link': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'person_info': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                'aka_title': {'names': [],
+                                    'col_types': {'id': DISCRETE,
+                                                  'info': DISCRETE}, # LIKE
+                                    'keys': {'id'},},
+                }
     else:
         raise 1
     
-    # validate primary keys
-    for t, primary_key_set in primary.items():
-        assert t in tables
-        assert primary_key_set.intersection(tables[t]['col_types']), f"{primary_key_set} must intersect {tables[t]['col_types']}"
-        ### just because an att is a primary key doesn't mean it's used
-        # assert primary_key_set.intersection(tables[t]['keys']), f"{primary_key_set} must intersect {tables[t]['keys']}"
-
     # validate other join keys
     for _, meta in tables.items():
         assert meta['keys'].intersection(meta['col_types']), f"{meta['keys']} must intersect {meta['col_types']}"
         
-    return primary, dates, intervals, tables
+    return dates, intervals, tables

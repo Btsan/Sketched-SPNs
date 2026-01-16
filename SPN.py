@@ -3,54 +3,11 @@ from time import perf_counter_ns
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans
 
 from RDC import rdc
 from Sketches import AMS, FastAGMS, BoundSketch, ExactSelectivity, CountSketch, CountMin
-
-from scipy.stats import chi2_contingency
-
-def cramers_v_matrix(df):
-    """
-    Computes the pairwise Cramer's V correlation matrix for categorical variables in a pandas DataFrame.
-    
-    Parameters:
-        df (pd.DataFrame): A pandas DataFrame containing categorical variables.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the pairwise Cramer's V values.
-    """
-    cols = df.columns
-    n = len(cols)
-    matrix = np.zeros((n, n))
-
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                matrix[i, j] = 1  # Perfect correlation with itself
-            else:
-                # Check for all unique values in either column
-                if df[cols[i]].nunique() >= 0.99 * len(df[cols[i]]) or df[cols[j]].nunique() >= 0.99 * len(df[cols[j]]):
-                    matrix[i, j] = 0  # No correlation possible
-                else:
-                    # Build the contingency table
-                    contingency_table = pd.crosstab(df[cols[i]], df[cols[j]])
-                    # Compute the chi-squared statistic
-                    chi2, _, _, _ = chi2_contingency(contingency_table)
-                    # Compute Cramer's V
-                    total = contingency_table.sum().sum()
-                    min_dim = min(contingency_table.shape) - 1
-                    
-                    # Check for zero divisor
-                    if total == 0 or min_dim == 0 or chi2 < 0:
-                        matrix[i, j] = 0
-                    else:
-                        value = chi2 / (total * min_dim)
-                        matrix[i, j] = np.sqrt(value) if value > 0 else 0
-
-    return matrix
 
 def get_component(node, adjacency_mat):
     group = set()
@@ -111,17 +68,10 @@ def decompose(data, features, pairwise_corr, corr_thresh=0.3, min_cluster=1e5, t
 def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=False):
     assert k >= 2, f"Invalid number of clusters: {k}"
     assert len(data) > 1, f"Not enough points ({len(data)}) to cluster"
-    # t0 = perf_counter_ns()
-    # feat = np.concatenate([np.stack(features[col]) for col in features], axis=-1)
-    # feat = np.column_stack([np.array(features[col].to_list()) for col in features])
     feat = features.values
-    # t1 = perf_counter_ns()
-    # print(f"Feature ({features.shape} -> {feat.shape}) extraction time: {(t1 - t0) / 1e6:.2f} ms")
 
     # t0 = perf_counter_ns()
     if use_kmeans:
-        # kmeans = KMeans(n_clusters=k).fit(sample)
-        # labels = kmeans.predict(scaled)[:, None]
         labels = KMeans(n_clusters=k).fit_predict(feat)
     else:
         if len(features) > max_sample_size:
@@ -138,7 +88,6 @@ def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=Fal
         else:
             assert isinstance(gmm, GaussianMixture), f"Invalid GMM type: {type(gmm)}"
             gmm = gmm.fit(sample)
-            # gmm.fit(scaled)
         labels = gmm.predict(feat)
         # print(f"gmm labels {np.bincount(labels)}")
 
@@ -162,13 +111,6 @@ def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=Fal
     # t0 = perf_counter_ns()
     clusters = []
     cluster_features = []
-    # for value in uniques:
-    #     rows = np.all(labels == value, axis=1)
-    #     if np.any(rows):
-    #         clusters.append(data.iloc[rows])
-    #         cluster_features.append(features.iloc[rows])
-    # data.loc[:, '_cluster'] = labels.flatten()
-    # features.loc[:, '_cluster'] = labels.flatten()
     for cluster, group in data.groupby(labels.flatten()):
         if not group.empty:
             clusters.append(group)
@@ -176,7 +118,6 @@ def cluster(data, features, k=2, gmm=None, max_sample_size=10000, use_kmeans=Fal
     for cluster, group in features.groupby(labels.flatten()):
         if not group.empty:
             cluster_features.append(group)
-        # cluster_features.append(features.iloc[group.index])
 
     # t1 = perf_counter_ns()
     # print(f"Cluster extraction time: {(t1 - t0) / 1e6:.2f} ms")
@@ -268,23 +209,41 @@ class SPN(object):
     
     def memory_usage(self):
         return self.node.memory_usage()
+    
+    def insert(self, data):
+        """ Insert new data (a single tuple) into the SPN """
+        pass
+
+    def cast_predicates(self, predicates):
+        """cast predicate values (presumably strings) to their correct datatype"""
+        predicates = deepcopy(predicates)
+        for col in predicates.keys():
+            if col in self.dtypes:
+                print(f"cast {col} to {self.dtypes[col]}")
+                # if type is a datetime, convert to nanoseconds since last epoch
+                use_nanoseconds = pd.api.types.is_datetime64_any_dtype(self.dtypes[col])
+                for op, val in predicates[col].items():
+                    print(f"\tcast {col} {op} {val} to {self.dtypes[col]}")
+                    if str.upper(op) == 'BETWEEN':
+                        val_1, val_2 = val.split(' AND ')
+                        print(f"\t\tsplit {col} {op} {val} to {col} >= {val_1} AND {col} <= {val_2}")
+                        if use_nanoseconds:
+                            predicates[col]['>='] = pd.to_datetime(val_1).value
+                            predicates[col]['<='] = pd.to_datetime(val_2).value
+                        else:
+                            predicates[col]['>='] = self.dtypes[col].type(val_1)
+                            predicates[col]['<='] = self.dtypes[col].type(val_2)
+                    elif use_nanoseconds:
+                        predicates[col][op] = pd.to_datetime(val).value
+                    else:
+                        predicates[col][op] = self.dtypes[col].type(val)
+        return predicates
 
     def __call__(self, predicates, key, components, _root=True, **kwargs):
         if _root and not self.exact_preds:
             # cast predicate values to the correct type
             # do not cast if using exact selectivity
-            predicates = deepcopy(predicates)
-            for col in predicates.keys():
-                if col in self.dtypes:
-                    print(f"cast {col} to {self.dtypes[col]}")
-                    # if type is a datetime, convert to nanoseconds since last epoch
-                    use_nanoseconds = pd.api.types.is_datetime64_any_dtype(self.dtypes[col])
-                    for op, val in predicates[col].items():
-                        print(f"\tcast {col} {op} {val} to {self.dtypes[col]}")
-                        if use_nanoseconds:
-                            predicates[col][op] = pd.to_datetime(val).value
-                        else:
-                            predicates[col][op] = self.dtypes[col].type(val)
+            predicates = self.cast_predicates(predicates)
 
         col_in_preds = self.columns.intersection(predicates.keys())
         col_in_keys = self.columns.intersection(key.keys())
@@ -293,35 +252,7 @@ class SPN(object):
             return 1, 0, 0
         elif _root and not col_in_preds and sketch_id in self.saved:
             return self.saved[sketch_id] if isinstance(self.saved[sketch_id], (int, float)) else self.saved[sketch_id].to_dense(), 0, 0
-        """
-        elif col_in_preds:
-            # check if predicates are out of bounds
-            for col in col_in_preds:
-                t = self.types[col]
-                left, right = self.bounds[col]
-                for op, val in predicates[col].items():
-                    # print(f"col {col}, op {op}, val {type(val)}{val}, min {self.data[col].min()}, max {self.data[col].max()}")
-                    if op == '==':
-                        if t(val) < left or t(val) > right:
-                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
-                            return 0, 0
-                    elif op == '<':
-                        if t(val) <= left:
-                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
-                            return 0, 0
-                    elif op == '>':
-                        if t(val) >= right:
-                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
-                            return 0, 0
-                    elif op == '<=':
-                        if t(val) < left:
-                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
-                            return 0, 0
-                    elif op == '>=':
-                        if t(val) > right:
-                            print(f"{col}{op}{val} out of bounds [{left}, {right}]")
-                            return 0, 0
-        """ # todo: this optimization is causing errors (estimator returns 0)
+
         sketch_or_prob, sketch_time, copy_time = self.node(predicates, key, components, _root=False, **kwargs)
         if _root and not col_in_preds:
             # save sketch for later use
@@ -332,28 +263,17 @@ class SPN(object):
         return sketch_or_prob, sketch_time, copy_time
     
     def iterative(self, predicates, key, components, **kwargs):
-        if not self.exact_preds:
-            # cast predicate values to the correct type
-            # do not cast if using exact selectivity
-            predicates = deepcopy(predicates)
-            for col in predicates.keys():
-                if col in self.dtypes:
-                    print(f"cast {col} to {self.dtypes[col]}")
-                    # if type is a datetime, convert to nanoseconds since last epoch
-                    use_nanoseconds = pd.api.types.is_datetime64_any_dtype(self.dtypes[col])
-                    for op, val in predicates[col].items():
-                        print(f"\tcast {col} {op} {val} to {self.dtypes[col]}")
-                        if use_nanoseconds:
-                            predicates[col][op] = pd.to_datetime(val).value
-                        else:
-                            predicates[col][op] = self.dtypes[col].type(val)
+        # if not self.exact_preds:
+        #     # cast predicate values to the correct type
+        #     # do not cast if using exact selectivity
+        #     predicates = self.cast_predicates(predicates)
 
-        col_in_preds = self.columns.intersection(predicates.keys())
-        sketch_id = frozenset(key.items()).union(components.items()).union(kwargs.items())
-        # print(col_in_preds, sketch_id, self.saved)
-        # print(type(col_in_preds), type(sketch_id), type(self.saved))
-        if not col_in_preds and sketch_id in self.saved:
-            return self.saved[sketch_id] if isinstance(self.saved[sketch_id], (int, float)) else self.saved[sketch_id].to_dense(), 0, 0
+        # col_in_preds = self.columns.intersection(predicates.keys())
+        # sketch_id = frozenset(key.items()).union(components.items()).union(kwargs.items())
+        # # print(col_in_preds, sketch_id, self.saved)
+        # # print(type(col_in_preds), type(sketch_id), type(self.saved))
+        # if not col_in_preds and sketch_id in self.saved:
+        #     return self.saved[sketch_id] if isinstance(self.saved[sketch_id], (int, float)) else self.saved[sketch_id].to_dense(), 0, 0
 
         results = dict()
 
@@ -415,12 +335,12 @@ class SPN(object):
                     # overhead from sketch copying
                     copy_time += t1 - t0 - sketch_time
 
-        if not col_in_preds:
-            # save sketch for later use
-            if isinstance(results[self.node][0], (int, float)):
-                self.saved[sketch_id] = results[self.node][0]
-            else:
-                self.saved[sketch_id] = results[self.node][0].to_sparse()
+        # if not col_in_preds:
+        #     # save sketch for later use
+        #     if isinstance(results[self.node][0], (int, float)):
+        #         self.saved[sketch_id] = results[self.node][0]
+        #     else:
+        #         self.saved[sketch_id] = results[self.node][0].to_sparse()
         return *results[self.node], copy_time
 
 class UnivariateLeaf(object):
@@ -602,10 +522,8 @@ class ProductNode(object):
                 sketch, sketch_time, copy_time = child(predicates, key, components, **kwargs)
                 # if (isinstance(sketch, (int, float)) and sketch == 0) or (sketch == 0).all():
                 #     return sketch, sketch_time, copy_time
-            elif min(probs) > 0 and child.columns.intersection(predicates.keys()):
+            else:
                 p, _, _ = child(predicates, key, components, **kwargs)
-                # if p == 0:
-                #     return p, sketch_time, copy_time
                 probs.append(p)
         prob = min(probs) if self.pessimistic else np.prod(probs).item()
         assert 0 <= prob <= 1, f"probability {prob} out of bounds"
