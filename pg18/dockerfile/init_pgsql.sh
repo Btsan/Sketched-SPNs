@@ -3,7 +3,10 @@
 initdb -D /var/lib/pgsql/18.3/data --username="postgres" --pwfile="/var/lib/pgsql/18.3/passwd"
 
 # No TCP/IP: listen on Unix socket only. Connect via: docker exec -it <ctr> psql -U postgres
-echo "listen_addresses = ''" >> /var/lib/pgsql/18.3/data/postgresql.conf
+# echo "listen_addresses = ''" >> /var/lib/pgsql/18.3/data/postgresql.conf
+    
+echo "host all all 127.0.0.1/32 md5" >> /var/lib/pgsql/18.3/data/pg_hba.conf
+echo "listen_addresses = '*'" >> /var/lib/pgsql/18.3/data/postgresql.conf
 
 sed -i 's/max_wal_size = 1GB/max_wal_size = 50GB/g' /var/lib/pgsql/18.3/data/postgresql.conf
 
